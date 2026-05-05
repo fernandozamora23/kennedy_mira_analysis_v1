@@ -1,10 +1,5 @@
-# app.py
-# Dashboard territorial-electoral Kennedy - Campaña Congreso 2026 / Concejo-JAL 2023
-
 from io import BytesIO
 from pathlib import Path
-import re
-import unicodedata
 
 import folium
 import numpy as np
@@ -20,504 +15,63 @@ except ImportError:
     gpd = None
 
 
-st.set_page_config(page_title="Dashboard Kennedy MIRA 2026", layout="wide")
+st.set_page_config(page_title="Dashboard territorial-electoral Kennedy", layout="wide")
 
 BASE_DIR = Path(__file__).resolve().parent
-ARCHIVO_CAMPANA = Path("data/CAMPAÑA CONGRESO 2026 KENNEDY (1).xlsx")
-ARCHIVO_GESTION = Path("data/Copia de Gestión Edil Lorena Garzón - 17 de febrero, 17_07.xlsx")
-ARCHIVO_VOTACION = Path("data/VOTACIÓN 2026.xlsx")
-ARCHIVO_UPZ = Path("data/upz_kennedy.geojson")
+ARCHIVO_CONSOLIDADO = BASE_DIR / "data" / "kennedy_mira_consolidado.xlsx"
+ARCHIVO_UPZ = BASE_DIR / "data" / "upz_kennedy.geojson"
+IGLESIAS_OFICIALES = ["CLASS ROMA", "KENNEDY CENTRAL", "PATIO BONITO", "CARVAJAL", "VALLADOLID"]
 
 COLORES = {
-    "azul": "#1F77B4",
-    "verde": "#2E7D32",
-    "rojo": "#C62828",
-    "naranja": "#F57C00",
-    "morado": "#6A1B9A",
-    "gris": "#6B7280",
-    "fondo": "#F6F8FB",
+    "fondo": "#F8FAFC",
+    "tarjeta": "#FFFFFF",
+    "texto": "#0F172A",
+    "secundario": "#334155",
+    "borde": "#E2E8F0",
+    "rojo": "#DC2626",
+    "verde": "#16A34A",
+    "azul": "#2563EB",
+    "naranja": "#F97316",
+    "morado": "#7C3AED",
+    "gris": "#64748B",
 }
 
-IGLESIAS = [
-    {
-        "IGLESIA": "Class Roma",
-        "LATITUD": 4.614359775316158,
-        "LONGITUD": -74.17619195767098,
-        "URL": "https://direcciones.idmji.org/es/iglesia/359/",
-        "TIPO": "Iglesia / templo",
-    },
-    {
-        "IGLESIA": "Patio Bonito",
-        "LATITUD": 4.646035122997863,
-        "LONGITUD": -74.17300841534194,
-        "URL": "https://direcciones.idmji.org/es/iglesia/301/",
-        "TIPO": "Iglesia / templo",
-    },
-    {
-        "IGLESIA": "Kennedy",
-        "LATITUD": 4.6217386978458155,
-        "LONGITUD": -74.16501499477366,
-        "URL": "",
-        "TIPO": "Iglesia / templo",
-    },
-    {
-        "IGLESIA": "Carvajal",
-        "LATITUD": 4.616343469904612,
-        "LONGITUD": -74.1404329155982,
-        "URL": "",
-        "TIPO": "Iglesia / templo",
-    },
-    {
-        "IGLESIA": "Valladolid",
-        "LATITUD": 4.647817860855581,
-        "LONGITUD": -74.14806885512174,
-        "URL": "",
-        "TIPO": "Iglesia / templo",
-    },
-]
-
-iglesias_df = pd.DataFrame(IGLESIAS)
-
-
 st.markdown(
-    """
+    f"""
     <style>
-    .stApp { background: #F6F8FB; }
-    div[data-testid="stMetric"] {
-        background: white;
-        border: 1px solid #E5E7EB;
+    .stApp {{ background: {COLORES['fondo']}; color: {COLORES['texto']}; }}
+    .block-container {{ padding-top: 1.7rem; padding-bottom: 2.5rem; }}
+    h1, h2, h3, h4, p, label, span {{ color: {COLORES['texto']}; }}
+    div[data-testid="stMetric"] {{
+        background: {COLORES['tarjeta']};
+        border: 1px solid {COLORES['borde']};
+        border-radius: 10px;
+        padding: 15px 16px;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+    }}
+    div[data-testid="stMetricLabel"] p {{ color: {COLORES['secundario']}; font-weight: 650; }}
+    div[data-testid="stMetricValue"] {{ color: {COLORES['texto']}; }}
+    .hero {{
+        background: {COLORES['tarjeta']};
+        border: 1px solid {COLORES['borde']};
+        border-radius: 12px;
+        padding: 22px 24px;
+        margin-bottom: 18px;
+    }}
+    .hero-title {{ font-size: 2rem; font-weight: 780; color: {COLORES['texto']}; margin-bottom: 4px; }}
+    .hero-subtitle {{ color: {COLORES['secundario']}; font-size: 1rem; }}
+    .panel {{
+        background: {COLORES['tarjeta']};
+        border: 1px solid {COLORES['borde']};
         border-radius: 10px;
         padding: 16px 18px;
-        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-    }
-    div[data-testid="stMetricLabel"] { color: #475569; }
-    .block-container { padding-top: 1.8rem; padding-bottom: 2.5rem; }
-    .section-card {
-        background: white;
-        border: 1px solid #E5E7EB;
-        border-radius: 10px;
-        padding: 18px 20px;
-        margin: 8px 0 18px 0;
-    }
-    .hero-title { font-size: 2.2rem; font-weight: 760; color: #0F172A; margin-bottom: 0.25rem; }
-    .hero-subtitle { color: #475569; font-size: 1rem; margin-bottom: 1.2rem; }
-    .small-muted { color: #64748B; font-size: 0.9rem; }
+        margin: 8px 0 14px 0;
+    }}
+    .muted {{ color: {COLORES['secundario']}; }}
     </style>
     """,
     unsafe_allow_html=True,
 )
-
-
-def normalizar_texto(valor):
-    if pd.isna(valor):
-        return np.nan
-    texto = str(valor).strip().upper()
-    texto = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("utf-8")
-    texto = re.sub(r"\s+", " ", texto)
-    return texto
-
-
-def limpiar_columnas(df):
-    df = df.copy()
-    df.columns = [normalizar_texto(c).replace(" ", "_") for c in df.columns]
-    return df
-
-
-def ruta_repo(path):
-    return BASE_DIR / path
-
-
-def archivo_existe(path):
-    return ruta_repo(path).exists()
-
-
-@st.cache_data(show_spinner=False)
-def hojas_excel(path_str):
-    path = ruta_repo(Path(path_str))
-    if not path.exists():
-        return []
-    try:
-        return pd.ExcelFile(path, engine="openpyxl").sheet_names
-    except Exception:
-        return []
-
-
-def hoja_preferida(hojas, preferidas):
-    if not hojas:
-        return None
-    preferidas_norm = [normalizar_texto(x) for x in preferidas]
-    for hoja in hojas:
-        if normalizar_texto(hoja) in preferidas_norm:
-            return hoja
-    return hojas[0]
-
-
-def selector_hoja(etiqueta, archivo, preferidas, key):
-    hojas = hojas_excel(str(archivo))
-    if not hojas:
-        return None
-    default = hoja_preferida(hojas, preferidas)
-    indice = hojas.index(default) if default in hojas else 0
-    return st.sidebar.selectbox(etiqueta, hojas, index=indice, key=key)
-
-
-@st.cache_data(show_spinner=False)
-def leer_excel_seguro(path_str, sheet_name):
-    path = ruta_repo(Path(path_str))
-    if not path.exists() or not sheet_name:
-        return pd.DataFrame()
-    try:
-        return limpiar_columnas(pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl"))
-    except Exception as exc:
-        st.warning(f"No se pudo leer {path.name} / {sheet_name}: {exc}")
-        return pd.DataFrame()
-
-
-def extraer_lat_lon(valor):
-    if pd.isna(valor):
-        return pd.Series([np.nan, np.nan])
-    texto = str(valor).replace(";", ",")
-    nums = re.findall(r"-?\d+(?:[.,]\d+)?", texto)
-    if len(nums) < 2:
-        return pd.Series([np.nan, np.nan])
-    try:
-        return pd.Series([float(nums[0].replace(",", ".")), float(nums[1].replace(",", "."))])
-    except ValueError:
-        return pd.Series([np.nan, np.nan])
-
-
-def serie_vacia(index, value=np.nan):
-    return pd.Series(value, index=index)
-
-
-def primera_columna(df, candidatas, contiene=None):
-    for col in candidatas:
-        if col in df.columns:
-            return col
-    if contiene:
-        for col in df.columns:
-            if all(fragmento in col for fragmento in contiene):
-                return col
-    return None
-
-
-def asegurar_columna(df, nombre, candidatas, default=np.nan):
-    origen = primera_columna(df, candidatas)
-    df[nombre] = df[origen] if origen else default
-    return df
-
-
-def preparar_texto_territorial(df):
-    df = df.copy()
-    for col in ["IGLESIA_KEY", "BARRIO_KEY", "UPZ_KEY", "PUESTO_KEY", "TIPO_ACTIVIDAD_KEY"]:
-        if col not in df.columns:
-            base = col.replace("_KEY", "")
-            df[col] = df[base].apply(normalizar_texto) if base in df.columns else np.nan
-    return df
-
-
-def asignar_temporada(fecha):
-    if pd.isna(fecha):
-        return "Sin fecha"
-    if fecha < pd.Timestamp("2026-03-08"):
-        return "Antes de elección"
-    if fecha == pd.Timestamp("2026-03-08"):
-        return "Día elección"
-    return "Después de elección"
-
-
-def asignar_upz_por_geometria(puntos_df, upz_geojson):
-    if gpd is None or puntos_df.empty or not ruta_repo(upz_geojson).exists():
-        return pd.Series(np.nan, index=puntos_df.index)
-    if not {"LAT", "LON"}.issubset(puntos_df.columns):
-        return pd.Series(np.nan, index=puntos_df.index)
-    try:
-        puntos_geo = puntos_df.dropna(subset=["LAT", "LON"]).copy()
-        if puntos_geo.empty:
-            return pd.Series(np.nan, index=puntos_df.index)
-        puntos_gdf = gpd.GeoDataFrame(
-            puntos_geo,
-            geometry=gpd.points_from_xy(puntos_geo["LON"], puntos_geo["LAT"]),
-            crs="EPSG:4326",
-        )
-        upz_gdf = gpd.read_file(ruta_repo(upz_geojson)).to_crs("EPSG:4326")
-        nombre_col = primera_columna(
-            upz_gdf,
-            ["UPZ", "NOMBRE", "NOM_UPZ", "NOMBRE_UPZ", "UPL", "NOM_UPL"],
-            contiene=["UPZ"],
-        )
-        if not nombre_col:
-            nombre_col = upz_gdf.columns[0]
-        joined = gpd.sjoin(puntos_gdf, upz_gdf[[nombre_col, "geometry"]], how="left", predicate="within")
-        resultado = pd.Series(np.nan, index=puntos_df.index)
-        resultado.loc[joined.index] = joined[nombre_col].values
-        return resultado
-    except Exception as exc:
-        st.warning(f"No se pudo hacer cruce espacial con UPZ: {exc}")
-        return pd.Series(np.nan, index=puntos_df.index)
-
-
-def coord_iglesia(nombre):
-    if pd.isna(nombre):
-        return (np.nan, np.nan)
-    nombre_norm = normalizar_texto(nombre)
-    aliases = {
-        "CLASS": "CLASS ROMA",
-        "KENNEDY CLASS": "CLASS ROMA",
-        "KENNEDY CENTRAL": "KENNEDY",
-    }
-    nombre_norm = aliases.get(nombre_norm, nombre_norm)
-    for item in IGLESIAS:
-        if normalizar_texto(item["IGLESIA"]) == nombre_norm:
-            return (item["LATITUD"], item["LONGITUD"])
-    return (np.nan, np.nan)
-
-
-def preparar_puestos(puestos, detalle):
-    puestos = puestos.copy()
-    detalle = detalle.copy()
-    asegurar_columna(puestos, "PUESTO", ["PUESTO_DE_VOTACION", "PUESTO"])
-    asegurar_columna(puestos, "IGLESIA", ["IGLESIA_RESPONSABLE", "IGLESIA"])
-    asegurar_columna(puestos, "BARRIO", ["BARRIO", "BARRIO_"])
-    asegurar_columna(puestos, "UPZ", ["UPZ", "ZONA"])
-
-    for col in ["PROMEDIO_2026", "PROMEDIO_2023", "CAMARA_2026", "SENADO_2026"]:
-        if col in puestos.columns:
-            puestos[col] = pd.to_numeric(puestos[col], errors="coerce")
-    if "PROMEDIO_2026" not in puestos.columns:
-        puestos["PROMEDIO_2026"] = serie_vacia(puestos.index, 0)
-    if "PROMEDIO_2023" not in puestos.columns:
-        puestos["PROMEDIO_2023"] = serie_vacia(puestos.index, 0)
-
-    puestos["PUESTO_KEY"] = puestos["PUESTO"].apply(normalizar_texto)
-    puestos["IGLESIA_KEY"] = puestos["IGLESIA"].apply(normalizar_texto)
-
-    if "PUESTO" in detalle.columns:
-        detalle["PUESTO_KEY"] = detalle["PUESTO"].apply(normalizar_texto)
-    if "PUESTO_DE_VOTACION" in detalle.columns:
-        detalle["PUESTO_KEY"] = detalle["PUESTO_DE_VOTACION"].apply(normalizar_texto)
-    if "COORDENADAS" in detalle.columns:
-        detalle[["LAT", "LON"]] = detalle["COORDENADAS"].apply(extraer_lat_lon)
-    asegurar_columna(detalle, "DIRECCION", ["DIRECCION", "DIRECCION_"])
-    asegurar_columna(detalle, "IGLESIA_DETALLE", ["IGLESIA_RESPONSABLE", "IGLESIA"])
-    asegurar_columna(detalle, "BARRIO_DETALLE", ["BARRIO", "BARRIO_"])
-    asegurar_columna(detalle, "UPZ_DETALLE", ["UPZ", "ZONA"])
-
-    if "PUESTO_KEY" in detalle.columns:
-        cols = [c for c in ["PUESTO_KEY", "DIRECCION", "COORDENADAS", "LAT", "LON", "IGLESIA_DETALLE", "BARRIO_DETALLE", "UPZ_DETALLE"] if c in detalle.columns]
-        puestos = puestos.merge(detalle[cols].drop_duplicates("PUESTO_KEY"), on="PUESTO_KEY", how="left")
-
-    for col_base, col_detalle in [("IGLESIA", "IGLESIA_DETALLE"), ("BARRIO", "BARRIO_DETALLE"), ("UPZ", "UPZ_DETALLE")]:
-        if col_detalle in puestos.columns:
-            puestos[col_base] = puestos[col_base].fillna(puestos[col_detalle])
-
-    puestos["BARRIO"] = puestos["BARRIO"].fillna("Sin barrio")
-    puestos["UPZ"] = puestos["UPZ"].fillna("Sin UPZ")
-    puestos["VARIACION_ABS"] = puestos["PROMEDIO_2026"] - puestos["PROMEDIO_2023"]
-    puestos["VARIACION_PCT"] = np.where(
-        puestos["PROMEDIO_2023"].fillna(0).ne(0),
-        puestos["VARIACION_ABS"] / puestos["PROMEDIO_2023"],
-        np.nan,
-    )
-    if "LAT" not in puestos.columns:
-        puestos["LAT"] = np.nan
-    if "LON" not in puestos.columns:
-        puestos["LON"] = np.nan
-    puestos = preparar_texto_territorial(puestos)
-    return puestos
-
-
-def preparar_agenda(agenda_general, agenda_paralela):
-    agenda = pd.concat([agenda_general, agenda_paralela], ignore_index=True)
-    if agenda.empty:
-        return agenda
-    asegurar_columna(agenda, "IGLESIA", ["SEDE", "IGLESIA"])
-    asegurar_columna(agenda, "BARRIO", ["BARRIO", "BARRIO_"])
-    asegurar_columna(agenda, "UPZ", ["UPZ", "ZONA"])
-    asegurar_columna(agenda, "TIPO_ACTIVIDAD", ["ACTIVIDAD", "TIPO_DE_ACTIVIDAD"])
-    asegurar_columna(agenda, "DETALLE", ["DETALLE_DE_LA_ACTIVIDAD", "DESCRIPCION_Y/O_ACTIVIDAD", "DESCRIPCION"])
-    asegurar_columna(agenda, "FECHA", ["FECHA_CAMPANA", "FECHA", "FECHA_DE_INICIO"])
-
-    agenda["FECHA"] = pd.to_datetime(agenda["FECHA"], errors="coerce")
-    agenda["TEMPORADA"] = agenda["FECHA"].apply(asignar_temporada)
-
-    coord_col = primera_columna(agenda, ["COORDENADAS", "COORDENADAS_DE_LA_REUNION/_GESTION"], contiene=["COORDEN"])
-    if coord_col:
-        agenda[["LAT", "LON"]] = agenda[coord_col].apply(extraer_lat_lon)
-    else:
-        agenda["LAT"] = np.nan
-        agenda["LON"] = np.nan
-
-    for idx, row in agenda[agenda["LAT"].isna()].iterrows():
-        lat, lon = coord_iglesia(row.get("IGLESIA"))
-        agenda.loc[idx, ["LAT", "LON"]] = [lat, lon]
-
-    agenda["BARRIO"] = agenda["BARRIO"].fillna("Sin barrio")
-    agenda["UPZ"] = agenda["UPZ"].fillna("Sin UPZ")
-    agenda = preparar_texto_territorial(agenda)
-    return agenda
-
-
-def preparar_mesas(mesas_campana, gestion):
-    mesas = pd.concat([mesas_campana, gestion], ignore_index=True)
-    if mesas.empty:
-        return mesas
-    asegurar_columna(mesas, "IGLESIA", ["IGLESIA", "IGLESIA_RESPONSABLE"])
-    asegurar_columna(mesas, "BARRIO", ["BARRIO", "BARRIO_"])
-    asegurar_columna(mesas, "UPZ", ["UPZ", "ZONA"])
-    asegurar_columna(mesas, "TEMA", ["TEMAS", "TEMA", "OBJETIVO_DE_LA_REUNION", "NOMBRE_GESTION"])
-    asegurar_columna(mesas, "ESTADO", ["ESTADO", "ESTADO_DE_SEGUIMIENTO", "ESTADO_ACTUAL_DEL_TRAMITE"])
-    asegurar_columna(mesas, "RESPONSABLE", ["RESPONSABLE", "ENCARGADO", "APOYO_ASESOR"])
-    asegurar_columna(mesas, "FECHA", ["FECHA", "FECHA_DE_INICIO", "MES"])
-    coord_col = primera_columna(mesas, ["COORDENADAS", "GEOREFERENCIACION"], contiene=["COORDEN"])
-    if coord_col:
-        mesas[["LAT", "LON"]] = mesas[coord_col].apply(extraer_lat_lon)
-    else:
-        mesas["LAT"] = np.nan
-        mesas["LON"] = np.nan
-    for idx, row in mesas[mesas["LAT"].isna()].iterrows():
-        lat, lon = coord_iglesia(row.get("IGLESIA"))
-        mesas.loc[idx, ["LAT", "LON"]] = [lat, lon]
-    mesas["BARRIO"] = mesas["BARRIO"].fillna("Sin barrio")
-    mesas["UPZ"] = mesas["UPZ"].fillna("Sin UPZ")
-    mesas = preparar_texto_territorial(mesas)
-    return mesas
-
-
-def agregar_conteos_territoriales(puestos, agenda, mesas):
-    puestos = puestos.copy()
-    for llave, nombre, origen in [
-        ("IGLESIA_KEY", "ACTIVIDADES_IGLESIA", agenda),
-        ("BARRIO_KEY", "ACTIVIDADES_BARRIO", agenda),
-        ("UPZ_KEY", "ACTIVIDADES_UPZ", agenda),
-    ]:
-        if llave in origen.columns:
-            conteo = origen.groupby(llave).size()
-            puestos[nombre] = puestos[llave].map(conteo).fillna(0).astype(int)
-        else:
-            puestos[nombre] = 0
-    for llave, nombre, origen in [
-        ("IGLESIA_KEY", "MESAS_IGLESIA", mesas),
-        ("BARRIO_KEY", "MESAS_BARRIO", mesas),
-        ("UPZ_KEY", "MESAS_UPZ", mesas),
-    ]:
-        if llave in origen.columns:
-            conteo = origen.groupby(llave).size()
-            puestos[nombre] = puestos[llave].map(conteo).fillna(0).astype(int)
-        else:
-            puestos[nombre] = 0
-    puestos["ACTIVIDADES_CERCANAS"] = puestos[["ACTIVIDADES_IGLESIA", "ACTIVIDADES_BARRIO", "ACTIVIDADES_UPZ"]].max(axis=1)
-    puestos["MESAS_CERCANAS"] = puestos[["MESAS_IGLESIA", "MESAS_BARRIO", "MESAS_UPZ"]].max(axis=1)
-    return puestos
-
-
-def construir_prioridad_puestos(puestos):
-    df = puestos.copy()
-    votos = df["PROMEDIO_2026"].fillna(0)
-    var = df["VARIACION_PCT"]
-    umbral_alto = votos.quantile(0.65) if len(votos) else 0
-    umbral_medio = votos.quantile(0.35) if len(votos) else 0
-
-    razones = []
-    acciones = []
-    prioridad = []
-    for _, row in df.iterrows():
-        r = []
-        a = []
-        p = "Baja"
-        votos_altos = row["PROMEDIO_2026"] >= umbral_alto
-        votos_medios = row["PROMEDIO_2026"] >= umbral_medio
-        caida_fuerte = pd.notna(row["VARIACION_PCT"]) and row["VARIACION_PCT"] <= -0.08
-        crecimiento = pd.notna(row["VARIACION_PCT"]) and row["VARIACION_PCT"] > 0.05
-        sin_actividad = row.get("ACTIVIDADES_CERCANAS", 0) == 0
-        sin_mesa = row.get("MESAS_CERCANAS", 0) == 0
-
-        if caida_fuerte and votos_altos:
-            p = "Alta"
-            r.append("caida fuerte con votacion relevante")
-            a.append("programar visita territorial y seguimiento semanal")
-        if votos_altos and sin_actividad:
-            p = "Alta"
-            r.append("votos altos sin actividades de campana registradas")
-            a.append("activar agenda de contacto con lideres y referidos")
-        if votos_altos and sin_mesa:
-            p = "Alta"
-            r.append("votos altos sin mesas de gestion registradas")
-            a.append("abrir mesa de trabajo con responsable territorial")
-        if p != "Alta" and votos_medios:
-            p = "Media"
-            r.append("votacion media con oportunidad de consolidacion")
-            a.append("mantener presencia quincenal y validar lideres")
-        if p != "Alta" and crecimiento:
-            p = "Media"
-            r.append("crecimiento moderado que debe consolidarse")
-            a.append("replicar tacticas del puesto en barrios cercanos")
-        if not r:
-            r.append("bajo volumen electoral o datos insuficientes")
-            a.append("monitorear y actualizar informacion")
-
-        prioridad.append(p)
-        razones.append("; ".join(r))
-        acciones.append("; ".join(dict.fromkeys(a)))
-
-    df["PRIORIDAD"] = prioridad
-    df["RAZON_PRIORIDAD"] = razones
-    df["ACCION_RECOMENDADA"] = acciones
-    df["RESPONSABLE_SUGERIDO"] = df["IGLESIA"].fillna("Equipo territorial")
-    df["TEMPORALIDAD_SUGERIDA"] = df["PRIORIDAD"].map({"Alta": "7 dias", "Media": "15 dias", "Baja": "30 dias"})
-    return df
-
-
-def resumen_territorial(df, llave, nombre_col, agenda, mesas):
-    if df.empty or llave not in df.columns:
-        return pd.DataFrame()
-    resumen = df.groupby([llave, nombre_col], dropna=False).agg(
-        votos_2026=("PROMEDIO_2026", "sum"),
-        votos_2023=("PROMEDIO_2023", "sum"),
-        puestos=("PUESTO_KEY", "nunique"),
-        prioridad_alta=("PRIORIDAD", lambda x: (x == "Alta").sum()),
-    ).reset_index()
-    resumen["variacion_absoluta"] = resumen["votos_2026"] - resumen["votos_2023"]
-    resumen["variacion_porcentual"] = np.where(resumen["votos_2023"].ne(0), resumen["variacion_absoluta"] / resumen["votos_2023"], np.nan)
-
-    for origen, col in [(agenda, "actividades"), (mesas, "mesas")]:
-        if llave in origen.columns and not origen.empty:
-            conteo = origen.groupby(llave).size().rename(col).reset_index()
-            resumen = resumen.merge(conteo, on=llave, how="left")
-        else:
-            resumen[col] = 0
-    resumen[["actividades", "mesas"]] = resumen[["actividades", "mesas"]].fillna(0).astype(int)
-    resumen["prioridad_territorial"] = np.select(
-        [
-            (resumen["prioridad_alta"] > 0) | ((resumen["votos_2026"] >= resumen["votos_2026"].quantile(0.65)) & (resumen["actividades"] == 0)),
-            resumen["votos_2026"] >= resumen["votos_2026"].quantile(0.35),
-        ],
-        ["Alta", "Media"],
-        default="Baja",
-    )
-    return resumen.sort_values("votos_2026", ascending=False)
-
-
-def hallazgos(puestos, resumen_iglesia, resumen_upz):
-    items = []
-    if not resumen_iglesia.empty:
-        mayor = resumen_iglesia.sort_values("votos_2026", ascending=False).iloc[0]
-        items.append(f"Mayor votacion por iglesia: {mayor['IGLESIA']} con {mayor['votos_2026']:,.0f} votos 2026.".replace(",", "."))
-        caida = resumen_iglesia.sort_values("variacion_absoluta", ascending=True).iloc[0]
-        items.append(f"Mayor caida por iglesia: {caida['IGLESIA']} con {caida['variacion_absoluta']:,.0f} votos de variacion absoluta.".replace(",", "."))
-    if not puestos.empty:
-        crece = puestos.sort_values("VARIACION_ABS", ascending=False).iloc[0]
-        baja = puestos.sort_values("VARIACION_ABS", ascending=True).iloc[0]
-        items.append(f"Puesto con mayor crecimiento: {crece['PUESTO']} ({crece['VARIACION_ABS']:,.0f}).".replace(",", "."))
-        items.append(f"Puesto con mayor caida: {baja['PUESTO']} ({baja['VARIACION_ABS']:,.0f}).".replace(",", "."))
-        sin_mesas = puestos[(puestos["PROMEDIO_2026"] >= puestos["PROMEDIO_2026"].quantile(0.65)) & (puestos["MESAS_CERCANAS"] == 0)]
-        if not sin_mesas.empty:
-            items.append(f"{len(sin_mesas)} puestos de alta votacion no tienen mesas de gestion cercanas registradas.")
-    if not resumen_upz.empty:
-        upz_alta = resumen_upz[resumen_upz["prioridad_territorial"] == "Alta"]
-        if not upz_alta.empty:
-            items.append("UPZ prioritarias: " + ", ".join(upz_alta["UPZ"].head(5).astype(str)) + ".")
-    return items
 
 
 def formato_numero(valor):
@@ -532,469 +86,513 @@ def formato_pct(valor):
     return f"{valor:.1%}"
 
 
-def to_csv_bytes(df):
+def variacion_color(valor):
+    if pd.isna(valor):
+        return COLORES["gris"]
+    if valor > 0:
+        return COLORES["verde"]
+    if valor < 0:
+        return COLORES["rojo"]
+    return COLORES["gris"]
+
+
+def csv_bytes(df):
     return df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
 
 
-def construir_excel(descargas):
+def excel_bytes(hojas):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        for nombre, df in descargas.items():
+        for nombre, df in hojas.items():
             df.to_excel(writer, sheet_name=nombre[:31], index=False)
     return output.getvalue()
 
 
-def color_variacion(valor):
-    if pd.isna(valor):
-        return COLORES["gris"]
-    return COLORES["verde"] if valor >= 0 else COLORES["rojo"]
+def leer_hoja(nombre):
+    return pd.read_excel(ARCHIVO_CONSOLIDADO, sheet_name=nombre, engine="openpyxl")
+
+
+@st.cache_data(show_spinner=False)
+def cargar_consolidado(timestamp):
+    del timestamp
+    hojas = {
+        "puestos_votacion": leer_hoja("puestos_votacion"),
+        "actividades_campana": leer_hoja("actividades_campana"),
+        "mesas_trabajo": leer_hoja("mesas_trabajo"),
+        "iglesias": leer_hoja("iglesias"),
+        "resumen_iglesia": leer_hoja("resumen_iglesia"),
+        "resumen_puesto": leer_hoja("resumen_puesto"),
+        "resumen_barrio": leer_hoja("resumen_barrio"),
+        "matriz_priorizacion": leer_hoja("matriz_priorizacion"),
+        "informe_ejecutivo": leer_hoja("informe_ejecutivo"),
+    }
+    return hojas
+
+
+def validar_consolidado():
+    if not ARCHIVO_CONSOLIDADO.exists():
+        st.error("No se encontro data/kennedy_mira_consolidado.xlsx.")
+        st.info("Ejecuta `python consolidar_datos.py` para generar la base maestra antes de abrir el dashboard.")
+        return False
+    requeridas = [
+        "puestos_votacion",
+        "actividades_campana",
+        "mesas_trabajo",
+        "iglesias",
+        "resumen_iglesia",
+        "resumen_puesto",
+        "resumen_barrio",
+        "matriz_priorizacion",
+        "informe_ejecutivo",
+    ]
+    try:
+        hojas = pd.ExcelFile(ARCHIVO_CONSOLIDADO, engine="openpyxl").sheet_names
+    except Exception as exc:
+        st.error(f"No se pudo abrir el consolidado: {exc}")
+        return False
+    faltantes = [hoja for hoja in requeridas if hoja not in hojas]
+    if faltantes:
+        st.error("El consolidado no tiene todas las hojas requeridas.")
+        st.warning(", ".join(faltantes))
+        return False
+    return True
+
+
+def aplicar_filtros(puestos, actividades, mesas, matriz):
+    st.sidebar.header("Filtros de analisis")
+    iglesia_sel = st.sidebar.multiselect("Iglesia oficial", IGLESIAS_OFICIALES, default=IGLESIAS_OFICIALES)
+    barrio_sel = st.sidebar.multiselect("Barrio", sorted(puestos["BARRIO"].dropna().astype(str).unique()))
+    upz_sel = st.sidebar.multiselect("UPZ", sorted(puestos["UPZ"].dropna().astype(str).unique()))
+    prioridad_sel = st.sidebar.multiselect("Prioridad", ["ALTA", "MEDIA", "BAJA"])
+    puesto_sel = st.sidebar.multiselect("Puesto de votacion", sorted(puestos["PUESTO"].dropna().astype(str).unique()))
+
+    puestos_f = puestos[puestos["IGLESIA"].isin(iglesia_sel)].copy()
+    actividades_f = actividades[actividades["IGLESIA"].isin(iglesia_sel)].copy()
+    mesas_f = mesas[mesas["IGLESIA"].isin(iglesia_sel)].copy()
+    matriz_f = matriz[matriz["IGLESIA"].isin(iglesia_sel)].copy()
+
+    if barrio_sel:
+        puestos_f = puestos_f[puestos_f["BARRIO"].isin(barrio_sel)]
+        actividades_f = actividades_f[actividades_f["BARRIO"].isin(barrio_sel)]
+        mesas_f = mesas_f[mesas_f["BARRIO"].isin(barrio_sel)]
+        matriz_f = matriz_f[matriz_f["BARRIO"].isin(barrio_sel)]
+    if upz_sel:
+        puestos_f = puestos_f[puestos_f["UPZ"].isin(upz_sel)]
+        matriz_f = matriz_f[matriz_f["UPZ"].isin(upz_sel)]
+    if prioridad_sel:
+        puestos_f = puestos_f[puestos_f["PRIORIDAD"].isin(prioridad_sel)]
+        matriz_f = matriz_f[matriz_f["NIVEL_PRIORIDAD"].isin(prioridad_sel)]
+    if puesto_sel:
+        puestos_f = puestos_f[puestos_f["PUESTO"].isin(puesto_sel)]
+        matriz_f = matriz_f[matriz_f["PUESTO"].isin(puesto_sel)]
+    return puestos_f, actividades_f, mesas_f, matriz_f
+
+
+def recalcular_resumen_iglesia(puestos, actividades, mesas, resumen_base):
+    base = pd.DataFrame({"IGLESIA": IGLESIAS_OFICIALES})
+    if puestos.empty:
+        resumen = base.copy()
+        for col in ["VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "PUESTOS", "BARRIOS", "ACTIVIDADES_CAMPANA", "MESAS_TRABAJO"]:
+            resumen[col] = 0
+        resumen["VARIACION_PORCENTUAL"] = np.nan
+        return resumen
+    resumen = puestos.groupby("IGLESIA", as_index=False).agg(
+        VOTOS_2026=("VOTOS_2026", "sum"),
+        VOTOS_2023=("VOTOS_2023", "sum"),
+        PUESTOS=("PUESTO_ID", "nunique"),
+        BARRIOS=("BARRIO", "nunique"),
+    )
+    resumen = base.merge(resumen, on="IGLESIA", how="left").fillna({"VOTOS_2026": 0, "VOTOS_2023": 0, "PUESTOS": 0, "BARRIOS": 0})
+    resumen["VARIACION_ABSOLUTA"] = resumen["VOTOS_2026"] - resumen["VOTOS_2023"]
+    resumen["VARIACION_PORCENTUAL"] = np.where(resumen["VOTOS_2023"].gt(0), resumen["VARIACION_ABSOLUTA"] / resumen["VOTOS_2023"], np.nan)
+    resumen["ACTIVIDADES_CAMPANA"] = resumen["IGLESIA"].map(actividades.groupby("IGLESIA").size()).fillna(0).astype(int)
+    resumen["MESAS_TRABAJO"] = resumen["IGLESIA"].map(mesas.groupby("IGLESIA").size()).fillna(0).astype(int)
+    cols_extra = ["PUESTO_MAYOR_VOTACION", "PUESTO_MAYOR_CAIDA", "PUESTO_MAYOR_CRECIMIENTO", "LECTURA_ESTRATEGICA", "RECOMENDACION"]
+    resumen = resumen.merge(resumen_base[["IGLESIA"] + cols_extra], on="IGLESIA", how="left")
+    return resumen
+
+
+def recalcular_resumen_barrio(puestos, actividades, mesas):
+    if puestos.empty:
+        return pd.DataFrame()
+    resumen = puestos.groupby(["BARRIO", "IGLESIA", "UPZ"], as_index=False).agg(
+        VOTOS_2026=("VOTOS_2026", "sum"),
+        VOTOS_2023=("VOTOS_2023", "sum"),
+        PUESTOS=("PUESTO_ID", "nunique"),
+    )
+    resumen["VARIACION_ABSOLUTA"] = resumen["VOTOS_2026"] - resumen["VOTOS_2023"]
+    resumen["VARIACION_PORCENTUAL"] = np.where(resumen["VOTOS_2023"].gt(0), resumen["VARIACION_ABSOLUTA"] / resumen["VOTOS_2023"], np.nan)
+    resumen["ACTIVIDADES_CAMPANA"] = resumen["BARRIO"].map(actividades.groupby("BARRIO").size()).fillna(0).astype(int)
+    resumen["MESAS_TRABAJO"] = resumen["BARRIO"].map(mesas.groupby("BARRIO").size()).fillna(0).astype(int)
+    resumen["PRIORIDAD"] = np.where(
+        (resumen["VARIACION_ABSOLUTA"] < 0) & (resumen["VOTOS_2026"] >= resumen["VOTOS_2026"].quantile(0.6)),
+        "ALTA",
+        np.where(resumen["VOTOS_2026"] >= resumen["VOTOS_2026"].quantile(0.35), "MEDIA", "BAJA"),
+    )
+    return resumen.sort_values("VOTOS_2026", ascending=False)
 
 
 def agregar_leyenda(mapa):
-    leyenda = """
-    <div style="position: fixed; bottom: 44px; left: 44px; z-index: 9999; background: white;
-        border: 1px solid #CBD5E1; border-radius: 8px; padding: 12px 14px; font-size: 12px;
-        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18);">
-        <b>Lectura territorial</b><br>
-        <span style="color:#2E7D32;">●</span> Variacion positiva<br>
-        <span style="color:#C62828;">●</span> Variacion negativa<br>
-        <span style="color:#6A1B9A;">●</span> Iglesia / templo<br>
-        <span style="color:#F57C00;">●</span> Gestion / mesas<br>
-        <span style="color:#1F77B4;">●</span> Campana
+    leyenda = f"""
+    <div style="position: fixed; bottom: 36px; left: 36px; z-index: 9999; background: #FFFFFF;
+        border: 1px solid {COLORES['borde']}; border-radius: 8px; padding: 12px 14px; font-size: 12px;
+        color: {COLORES['texto']}; box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18);">
+        <b>Mapa territorial</b><br>
+        <span style="color:{COLORES['verde']};">●</span> Puesto con crecimiento<br>
+        <span style="color:{COLORES['rojo']};">●</span> Puesto con caida<br>
+        <span style="color:{COLORES['gris']};">●</span> Sin comparacion<br>
+        <span style="color:{COLORES['morado']};">◆</span> Iglesia oficial<br>
+        <span style="color:{COLORES['azul']};">●</span> Actividad de campana<br>
+        <span style="color:{COLORES['naranja']};">●</span> Mesa de trabajo
     </div>
     """
     mapa.get_root().html.add_child(folium.Element(leyenda))
 
 
-@st.cache_data(show_spinner=False)
-def cargar_datos(hojas):
-    puestos_raw = leer_excel_seguro(str(ARCHIVO_VOTACION), hojas["puestos"])
-    detalle_raw = leer_excel_seguro(str(ARCHIVO_VOTACION), hojas["detalle"])
-    agenda_general = leer_excel_seguro(str(ARCHIVO_CAMPANA), hojas["agenda_general"])
-    agenda_paralela = leer_excel_seguro(str(ARCHIVO_CAMPANA), hojas["agenda_paralela"])
-    mesas_campana = leer_excel_seguro(str(ARCHIVO_CAMPANA), hojas["mesas_campana"])
-    gestion = leer_excel_seguro(str(ARCHIVO_GESTION), hojas["gestion"])
-
-    puestos = preparar_puestos(puestos_raw, detalle_raw)
-    agenda = preparar_agenda(agenda_general, agenda_paralela)
-    mesas = preparar_mesas(mesas_campana, gestion)
-
-    if ARCHIVO_UPZ.exists():
-        for df in [puestos, agenda, mesas]:
-            if "UPZ" not in df.columns or df["UPZ"].eq("Sin UPZ").all():
-                upz_geom = asignar_upz_por_geometria(df, ARCHIVO_UPZ)
-                df["UPZ"] = df["UPZ"].mask(df["UPZ"].eq("Sin UPZ") & upz_geom.notna(), upz_geom)
-                df["UPZ_KEY"] = df["UPZ"].apply(normalizar_texto)
-
-    puestos = agregar_conteos_territoriales(puestos, agenda, mesas)
-    puestos = construir_prioridad_puestos(puestos)
-    return puestos, agenda, mesas
-
-
-def validar_archivos():
-    faltantes = [archivo for archivo in [ARCHIVO_CAMPANA, ARCHIVO_GESTION, ARCHIVO_VOTACION] if not archivo_existe(archivo)]
-    if not faltantes:
-        return True
-    st.error("No se encontraron todos los archivos requeridos en la carpeta data/ del repositorio.")
-    for archivo in faltantes:
-        st.warning(f"Falta: {archivo}")
-    st.info("Agrega los archivos Excel a data/ y vuelve a ejecutar la app.")
-    return False
-
-
-st.markdown(
-    """
-    <div class="hero-title">Dashboard territorial-electoral Kennedy</div>
-    <div class="hero-subtitle">Campaña Congreso 2026 · Partido MIRA · Votación, gestión, iglesias, barrios, UPZ y priorización territorial</div>
-    """,
-    unsafe_allow_html=True,
-)
-
-if not validar_archivos():
-    st.stop()
-
-st.sidebar.header("Configuración de datos")
-hojas = {
-    "puestos": selector_hoja("Votación - resumen por puesto", ARCHIVO_VOTACION, ["Hoja 5"], "hoja_puestos"),
-    "detalle": selector_hoja("Votación - detalle y coordenadas", ARCHIVO_VOTACION, ["Hoja 3"], "hoja_detalle"),
-    "agenda_general": selector_hoja("Campaña - agenda general", ARCHIVO_CAMPANA, ["AGENDA GENERAL CON CANDIDATOS"], "hoja_agenda_general"),
-    "agenda_paralela": selector_hoja("Campaña - agenda paralela", ARCHIVO_CAMPANA, ["AGENDA PARALELA"], "hoja_agenda_paralela"),
-    "mesas_campana": selector_hoja("Campaña - mesas", ARCHIVO_CAMPANA, ["Mesas"], "hoja_mesas_campana"),
-    "gestion": selector_hoja("Gestión - mesas de trabajo", ARCHIVO_GESTION, ["SEGUIMIENTO MESAS DE TRABAJO"], "hoja_gestion"),
-}
-
-if any(v is None for v in hojas.values()):
-    st.error("No fue posible detectar las hojas necesarias en los archivos Excel.")
-    st.stop()
-
-with st.spinner("Preparando datos territoriales y electorales..."):
-    puestos, agenda, mesas = cargar_datos(hojas)
-
-if not ARCHIVO_UPZ.exists():
-    st.sidebar.warning("No se encontro data/upz_kennedy.geojson. El dashboard usara UPZ si existe como columna en los Excel.")
-elif gpd is None:
-    st.sidebar.warning("GeoJSON UPZ detectado, pero geopandas no esta instalado. Se omite el cruce espacial.")
-
-st.sidebar.header("Filtros territoriales")
-iglesias_opciones = sorted([x for x in puestos["IGLESIA_KEY"].dropna().unique()])
-barrios_opciones = sorted([x for x in puestos["BARRIO_KEY"].dropna().unique()])
-upz_opciones = sorted([x for x in puestos["UPZ_KEY"].dropna().unique()])
-puestos_opciones = sorted([x for x in puestos["PUESTO_KEY"].dropna().unique()])
-tipo_actividad_opciones = sorted([x for x in agenda.get("TIPO_ACTIVIDAD_KEY", pd.Series(dtype=str)).dropna().unique()])
-prioridad_opciones = ["Alta", "Media", "Baja"]
-
-iglesia_sel = st.sidebar.multiselect("Iglesia / templo", iglesias_opciones, default=iglesias_opciones)
-barrio_sel = st.sidebar.multiselect("Barrio", barrios_opciones)
-upz_sel = st.sidebar.multiselect("UPZ", upz_opciones)
-tipo_actividad_sel = st.sidebar.multiselect("Tipo de actividad", tipo_actividad_opciones)
-prioridad_sel = st.sidebar.multiselect("Prioridad", prioridad_opciones)
-puesto_sel = st.sidebar.multiselect("Puesto de votacion", puestos_opciones)
-
-puestos_f = puestos.copy()
-agenda_f = agenda.copy()
-mesas_f = mesas.copy()
-if iglesia_sel:
-    puestos_f = puestos_f[puestos_f["IGLESIA_KEY"].isin(iglesia_sel)]
-    agenda_f = agenda_f[agenda_f["IGLESIA_KEY"].isin(iglesia_sel)] if "IGLESIA_KEY" in agenda_f.columns else agenda_f
-    mesas_f = mesas_f[mesas_f["IGLESIA_KEY"].isin(iglesia_sel)] if "IGLESIA_KEY" in mesas_f.columns else mesas_f
-if barrio_sel:
-    puestos_f = puestos_f[puestos_f["BARRIO_KEY"].isin(barrio_sel)]
-    agenda_f = agenda_f[agenda_f["BARRIO_KEY"].isin(barrio_sel)] if "BARRIO_KEY" in agenda_f.columns else agenda_f
-    mesas_f = mesas_f[mesas_f["BARRIO_KEY"].isin(barrio_sel)] if "BARRIO_KEY" in mesas_f.columns else mesas_f
-if upz_sel:
-    puestos_f = puestos_f[puestos_f["UPZ_KEY"].isin(upz_sel)]
-    agenda_f = agenda_f[agenda_f["UPZ_KEY"].isin(upz_sel)] if "UPZ_KEY" in agenda_f.columns else agenda_f
-    mesas_f = mesas_f[mesas_f["UPZ_KEY"].isin(upz_sel)] if "UPZ_KEY" in mesas_f.columns else mesas_f
-if tipo_actividad_sel and "TIPO_ACTIVIDAD_KEY" in agenda_f.columns:
-    agenda_f = agenda_f[agenda_f["TIPO_ACTIVIDAD_KEY"].isin(tipo_actividad_sel)]
-if prioridad_sel:
-    puestos_f = puestos_f[puestos_f["PRIORIDAD"].isin(prioridad_sel)]
-if puesto_sel:
-    puestos_f = puestos_f[puestos_f["PUESTO_KEY"].isin(puesto_sel)]
-
-resumen_iglesia = resumen_territorial(puestos_f, "IGLESIA_KEY", "IGLESIA", agenda_f, mesas_f)
-resumen_barrio = resumen_territorial(puestos_f, "BARRIO_KEY", "BARRIO", agenda_f, mesas_f)
-resumen_upz = resumen_territorial(puestos_f, "UPZ_KEY", "UPZ", agenda_f, mesas_f)
-matriz_priorizacion = puestos_f.sort_values(["PRIORIDAD", "PROMEDIO_2026"], ascending=[True, False])
-
-votos_2026 = puestos_f["PROMEDIO_2026"].sum()
-votos_2023 = puestos_f["PROMEDIO_2023"].sum()
-var_abs = votos_2026 - votos_2023
-var_pct = var_abs / votos_2023 if votos_2023 else np.nan
-
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Votos 2026", formato_numero(votos_2026))
-k2.metric("Votos 2023", formato_numero(votos_2023))
-k3.metric("Variacion absoluta", formato_numero(var_abs), delta=formato_numero(var_abs))
-k4.metric("Variacion porcentual", formato_pct(var_pct), delta=formato_pct(var_pct))
-k5, k6, k7, k8 = st.columns(4)
-k5.metric("Puestos analizados", formato_numero(puestos_f["PUESTO_KEY"].nunique()))
-k6.metric("Actividades de campana", formato_numero(len(agenda_f)))
-k7.metric("Mesas de trabajo", formato_numero(len(mesas_f)))
-k8.metric("Iglesias analizadas", formato_numero(puestos_f["IGLESIA_KEY"].nunique()))
-
-hallazgos_auto = hallazgos(puestos_f, resumen_iglesia, resumen_upz)
-
-tab_resumen, tab_mapa, tab_iglesias, tab_graficas, tab_priorizacion, tab_informe, tab_exportables = st.tabs(
-    ["Resumen ejecutivo", "Mapa territorial", "Iglesias / templos", "Graficas", "Priorizacion", "Informe ejecutivo", "Exportables"]
-)
-
-with tab_resumen:
-    st.subheader("Portada y lectura ejecutiva")
-    c1, c2 = st.columns([1.2, 1])
-    with c1:
-        st.markdown('<div class="section-card">', unsafe_allow_html=True)
-        st.write("Este tablero cruza votacion 2026, base comparativa 2023, actividades de campana, mesas de trabajo, iglesias responsables, puestos de votacion y variables territoriales disponibles.")
-        st.write("La lectura prioriza puntos donde hay alto potencial electoral, caidas relevantes o ausencia de presencia territorial registrada.")
-        st.markdown("</div>", unsafe_allow_html=True)
-        with st.expander("Hallazgos automaticos", expanded=True):
-            for item in hallazgos_auto:
-                st.write(f"- {item}")
-        with st.expander("Recomendacion estrategica", expanded=True):
-            altas = matriz_priorizacion[matriz_priorizacion["PRIORIDAD"] == "Alta"].head(10)
-            if altas.empty:
-                st.write("Mantener seguimiento territorial y completar informacion de barrios, UPZ y mesas.")
-            else:
-                st.write("Priorizar visitas, reuniones y mesas de gestion en estos puestos:")
-                st.dataframe(altas[["PUESTO", "IGLESIA", "BARRIO", "UPZ", "PROMEDIO_2026", "VARIACION_ABS", "RAZON_PRIORIDAD", "ACCION_RECOMENDADA"]], use_container_width=True)
-    with c2:
-        if not resumen_iglesia.empty:
-            fig = px.bar(
-                resumen_iglesia.sort_values("votos_2026"),
-                x="votos_2026",
-                y="IGLESIA",
-                orientation="h",
-                title="Votos 2026 por iglesia responsable",
-                color_discrete_sequence=[COLORES["azul"]],
-            )
-            fig.update_layout(height=420, margin=dict(l=10, r=10, t=55, b=10))
-            st.plotly_chart(fig, use_container_width=True)
-
-with tab_mapa:
-    st.subheader("Mapa interactivo territorial")
-    mapa = folium.Map(location=[4.628, -74.160], zoom_start=13, tiles="CartoDB positron", control_scale=True)
+def crear_mapa(puestos, iglesias, actividades, mesas):
+    mapa = folium.Map(location=[4.628, -74.16], zoom_start=13, tiles="CartoDB positron", control_scale=True)
     Fullscreen(position="topleft").add_to(mapa)
     MiniMap(toggle_display=True, minimized=True).add_to(mapa)
 
     if ARCHIVO_UPZ.exists() and gpd is not None:
         try:
-            gdf = gpd.read_file(ruta_repo(ARCHIVO_UPZ)).to_crs("EPSG:4326")
+            upz = gpd.read_file(ARCHIVO_UPZ).to_crs("EPSG:4326")
             folium.GeoJson(
-                gdf,
-                name="UPZ Kennedy",
-                style_function=lambda _: {"fillColor": "#64748B", "color": "#334155", "weight": 1, "fillOpacity": 0.08},
+                upz,
+                name="Poligonos UPZ",
+                style_function=lambda _: {"fillColor": COLORES["azul"], "color": "#1E3A8A", "weight": 1, "fillOpacity": 0.08},
             ).add_to(mapa)
         except Exception as exc:
-            st.warning(f"No se pudo cargar la capa UPZ: {exc}")
+            st.warning(f"No se pudo cargar data/upz_kennedy.geojson: {exc}")
 
-    puestos_cluster = MarkerCluster(name="Puestos de votacion").add_to(mapa)
-    variacion_layer = folium.FeatureGroup(name="Variacion electoral", show=False).add_to(mapa)
-    for _, row in puestos_f.dropna(subset=["LAT", "LON"]).iterrows():
-        votos_26 = row.get("PROMEDIO_2026", np.nan)
-        votos_23 = row.get("PROMEDIO_2023", np.nan)
+    cluster = MarkerCluster(name="Puestos de votacion").add_to(mapa)
+    variacion = folium.FeatureGroup(name="Variacion electoral", show=True).add_to(mapa)
+    for _, row in puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
+        color = variacion_color(row["VARIACION_ABSOLUTA"])
         popup = f"""
-        <div style="font-family: Arial; font-size: 13px; min-width: 260px;">
-            <h4 style="margin: 0 0 8px 0;">{row.get('PUESTO', 'Puesto')}</h4>
-            <b>Barrio:</b> {row.get('BARRIO', 'N/D')}<br>
-            <b>UPZ:</b> {row.get('UPZ', 'N/D')}<br>
-            <b>Iglesia responsable:</b> {row.get('IGLESIA', 'N/D')}<br>
-            <b>Votos 2026:</b> {formato_numero(votos_26)}<br>
-            <b>Votos 2023:</b> {formato_numero(votos_23)}<br>
-            <b>Variacion abs.:</b> {formato_numero(row.get('VARIACION_ABS'))}<br>
-            <b>Variacion %:</b> {formato_pct(row.get('VARIACION_PCT'))}<br>
-            <b>Actividades cercanas:</b> {row.get('ACTIVIDADES_CERCANAS', 0)}<br>
-            <b>Mesas cercanas:</b> {row.get('MESAS_CERCANAS', 0)}<br>
-            <b>Prioridad:</b> {row.get('PRIORIDAD', 'N/D')}
+        <div style="font-family: Arial; font-size: 13px; min-width: 285px; color: #0F172A;">
+            <h4 style="margin:0 0 8px 0;">{row['PUESTO']}</h4>
+            <b>Iglesia:</b> {row['IGLESIA']}<br>
+            <b>Barrio:</b> {row['BARRIO']}<br>
+            <b>UPZ:</b> {row['UPZ']}<br>
+            <b>Votos 2026:</b> {formato_numero(row['VOTOS_2026'])}<br>
+            <b>Votos 2023:</b> {formato_numero(row['VOTOS_2023'])}<br>
+            <b>Variacion absoluta:</b> {formato_numero(row['VARIACION_ABSOLUTA'])}<br>
+            <b>Variacion porcentual:</b> {formato_pct(row['VARIACION_PORCENTUAL'])}<br>
+            <b>Actividades de campana:</b> {row['ACTIVIDADES_CAMPANA']}<br>
+            <b>Mesas de trabajo:</b> {row['MESAS_TRABAJO_BARRIO']}<br>
+            <b>Prioridad:</b> {row['PRIORIDAD']}<br>
+            <b>Accion:</b> {row['ACCION_RECOMENDADA']}
         </div>
         """
-        radio = max(5, min(18, float(votos_26 or 0) / 18))
+        radio = max(5, min(18, float(row["VOTOS_2026"] or 0) / 18))
         folium.CircleMarker(
-            location=[row["LAT"], row["LON"]],
+            location=[row["LATITUD"], row["LONGITUD"]],
             radius=radio,
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.72,
+            weight=2,
+            tooltip=f"{row['PUESTO']} · {row['IGLESIA']}",
+            popup=folium.Popup(popup, max_width=390),
+        ).add_to(cluster)
+        folium.CircleMarker(
+            location=[row["LATITUD"], row["LONGITUD"]],
+            radius=radio + 4,
+            color=color,
+            fill=False,
+            weight=3,
+            tooltip=f"Variacion electoral: {formato_numero(row['VARIACION_ABSOLUTA'])}",
+        ).add_to(variacion)
+
+    iglesias_layer = folium.FeatureGroup(name="Iglesias oficiales", show=True).add_to(mapa)
+    for _, row in iglesias.iterrows():
+        link = f"<br><a href='{row['URL']}' target='_blank'>Ver direccion</a>" if isinstance(row.get("URL"), str) and row["URL"] else ""
+        html = f"<b>{row['IGLESIA']}</b><br>Lat: {row['LATITUD']}<br>Lon: {row['LONGITUD']}{link}"
+        folium.Marker(
+            location=[row["LATITUD"], row["LONGITUD"]],
+            tooltip=row["IGLESIA"],
+            popup=folium.Popup(html, max_width=280),
+            icon=folium.Icon(color="purple", icon="star", prefix="fa"),
+        ).add_to(iglesias_layer)
+        folium.map.Marker(
+            [row["LATITUD"], row["LONGITUD"]],
+            icon=folium.DivIcon(
+                html=f"""<div style="font-size:11px;font-weight:700;color:{COLORES['morado']};background:white;border:1px solid {COLORES['borde']};border-radius:4px;padding:2px 5px;white-space:nowrap;">{row['IGLESIA']}</div>"""
+            ),
+        ).add_to(iglesias_layer)
+
+    actividades_layer = folium.FeatureGroup(name="Actividades de campana", show=False).add_to(mapa)
+    for _, row in actividades.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
+        folium.CircleMarker(
+            location=[row["LATITUD"], row["LONGITUD"]],
+            radius=5,
             color=COLORES["azul"],
             fill=True,
             fill_color=COLORES["azul"],
-            fill_opacity=0.72,
-            weight=1,
-            tooltip=f"{row.get('PUESTO', 'Puesto')} · {formato_numero(votos_26)} votos",
-            popup=folium.Popup(popup, max_width=360),
-        ).add_to(puestos_cluster)
-        folium.CircleMarker(
-            location=[row["LAT"], row["LON"]],
-            radius=radio + 2,
-            color=color_variacion(row.get("VARIACION_ABS")),
-            fill=False,
-            weight=3,
-            tooltip=f"Variacion: {formato_numero(row.get('VARIACION_ABS'))}",
-        ).add_to(variacion_layer)
-
-    iglesias_layer = folium.FeatureGroup(name="Iglesias", show=True).add_to(mapa)
-    for _, row in iglesias_df.iterrows():
-        link = f"<br><a href='{row['URL']}' target='_blank'>Ver direccion</a>" if row["URL"] else ""
-        popup = f"<b>{row['IGLESIA']}</b><br>{row['TIPO']}<br>Lat: {row['LATITUD']}<br>Lon: {row['LONGITUD']}{link}"
-        folium.Marker(
-            location=[row["LATITUD"], row["LONGITUD"]],
-            tooltip=f"Iglesia: {row['IGLESIA']}",
-            popup=folium.Popup(popup, max_width=280),
-            icon=folium.Icon(color="purple", icon="home", prefix="fa"),
-        ).add_to(iglesias_layer)
+            tooltip=str(row.get("TIPO_ACTIVIDAD", "Actividad")),
+            popup=folium.Popup(f"<b>{row.get('TIPO_ACTIVIDAD', '')}</b><br>{row.get('IGLESIA', '')}<br>{row.get('BARRIO', '')}<br>{row.get('OBSERVACIONES', '')}", max_width=320),
+        ).add_to(actividades_layer)
 
     mesas_layer = folium.FeatureGroup(name="Mesas de trabajo", show=False).add_to(mapa)
-    for _, row in mesas_f.dropna(subset=["LAT", "LON"]).iterrows():
-        popup = f"<b>{row.get('TEMA', 'Mesa de trabajo')}</b><br>{row.get('BARRIO', '')}<br>{row.get('IGLESIA', '')}<br>{row.get('ESTADO', '')}"
-        folium.Marker(
-            location=[row["LAT"], row["LON"]],
+    for _, row in mesas.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
+        folium.CircleMarker(
+            location=[row["LATITUD"], row["LONGITUD"]],
+            radius=6,
+            color=COLORES["naranja"],
+            fill=True,
+            fill_color=COLORES["naranja"],
             tooltip=str(row.get("TEMA", "Mesa de trabajo")),
-            popup=folium.Popup(popup, max_width=320),
-            icon=folium.Icon(color="orange", icon="briefcase", prefix="fa"),
+            popup=folium.Popup(f"<b>{row.get('TEMA', '')}</b><br>{row.get('IGLESIA', '')}<br>{row.get('BARRIO', '')}<br>{row.get('ESTADO', '')}", max_width=320),
         ).add_to(mesas_layer)
 
-    agenda_layer = folium.FeatureGroup(name="Actividades de campana", show=False).add_to(mapa)
-    for _, row in agenda_f.dropna(subset=["LAT", "LON"]).iterrows():
-        popup = f"<b>{row.get('TIPO_ACTIVIDAD', 'Actividad')}</b><br>{row.get('IGLESIA', '')}<br>{row.get('BARRIO', '')}<br>{row.get('DETALLE', '')}"
-        folium.Marker(
-            location=[row["LAT"], row["LON"]],
-            tooltip=str(row.get("TIPO_ACTIVIDAD", "Actividad")),
-            popup=folium.Popup(popup, max_width=320),
-            icon=folium.Icon(color="blue", icon="users", prefix="fa"),
-        ).add_to(agenda_layer)
-
-    heat_data = puestos_f.dropna(subset=["LAT", "LON"])[["LAT", "LON", "PROMEDIO_2026"]].values.tolist()
+    heat_data = puestos.dropna(subset=["LATITUD", "LONGITUD"])[["LATITUD", "LONGITUD", "VOTOS_2026"]].values.tolist()
     if heat_data:
-        HeatMap(heat_data, name="Calor votos 2026", radius=24, blur=18).add_to(mapa)
+        HeatMap(heat_data, name="Mapa de calor votos 2026", radius=24, blur=18, show=False).add_to(mapa)
 
     agregar_leyenda(mapa)
     folium.LayerControl(collapsed=False).add_to(mapa)
-    st_folium(mapa, width=None, height=720)
-    with st.expander("Como leer este mapa"):
-        st.write("El tamano de los puntos de votacion representa votos 2026. El contorno verde indica crecimiento; rojo indica caida. Las capas se pueden activar o desactivar desde el control del mapa.")
+    return mapa
 
-with tab_iglesias:
-    st.subheader("Analisis por iglesia / templo")
-    for iglesia in ["Class Roma", "Patio Bonito", "Kennedy", "Carvajal", "Valladolid"]:
-        iglesia_key = normalizar_texto(iglesia)
-        df_i = puestos_f[puestos_f["IGLESIA_KEY"].eq(iglesia_key)]
-        agenda_i = agenda_f[agenda_f["IGLESIA_KEY"].eq(iglesia_key)] if "IGLESIA_KEY" in agenda_f.columns else pd.DataFrame()
-        mesas_i = mesas_f[mesas_f["IGLESIA_KEY"].eq(iglesia_key)] if "IGLESIA_KEY" in mesas_f.columns else pd.DataFrame()
-        with st.expander(iglesia, expanded=not df_i.empty):
-            if df_i.empty:
-                st.write("No hay puestos asociados en los datos filtrados.")
-                continue
-            a, b, c, d = st.columns(4)
-            a.metric("Votos 2026", formato_numero(df_i["PROMEDIO_2026"].sum()))
-            b.metric("Votos 2023", formato_numero(df_i["PROMEDIO_2023"].sum()))
-            d_abs = df_i["VARIACION_ABS"].sum()
-            c.metric("Variacion", formato_numero(d_abs), delta=formato_numero(d_abs))
-            d.metric("Puestos", formato_numero(df_i["PUESTO_KEY"].nunique()))
-            st.write(
-                f"Barrios asociados: {', '.join(df_i['BARRIO'].dropna().astype(str).unique()[:8]) or 'N/D'} · "
-                f"UPZ asociadas: {', '.join(df_i['UPZ'].dropna().astype(str).unique()[:8]) or 'N/D'} · "
-                f"Actividades: {len(agenda_i)} · Mesas: {len(mesas_i)}"
+
+st.markdown(
+    """
+    <div class="hero">
+      <div class="hero-title">Dashboard territorial-electoral Kennedy</div>
+      <div class="hero-subtitle">Base maestra consolidada · Campaña Congreso 2026 · Partido MIRA · Variación electoral, presencia comunitaria y priorización de intervención</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+if not validar_consolidado():
+    st.stop()
+
+datos = cargar_consolidado(ARCHIVO_CONSOLIDADO.stat().st_mtime)
+puestos_all = datos["puestos_votacion"]
+actividades_all = datos["actividades_campana"]
+mesas_all = datos["mesas_trabajo"]
+iglesias = datos["iglesias"]
+resumen_iglesia_base = datos["resumen_iglesia"]
+matriz_all = datos["matriz_priorizacion"]
+informe = datos["informe_ejecutivo"]
+
+puestos_qc = puestos_all[~puestos_all["IGLESIA"].isin(IGLESIAS_OFICIALES)].copy()
+actividades_qc = actividades_all[~actividades_all["IGLESIA"].isin(IGLESIAS_OFICIALES)].copy()
+mesas_qc = mesas_all[~mesas_all["IGLESIA"].isin(IGLESIAS_OFICIALES)].copy()
+
+puestos, actividades, mesas, matriz = aplicar_filtros(puestos_all, actividades_all, mesas_all, matriz_all)
+resumen_iglesia = recalcular_resumen_iglesia(puestos, actividades, mesas, resumen_iglesia_base)
+resumen_barrio = recalcular_resumen_barrio(puestos, actividades, mesas)
+
+votos_2026 = puestos["VOTOS_2026"].sum()
+votos_2023 = puestos["VOTOS_2023"].sum()
+var_abs = votos_2026 - votos_2023
+var_pct = var_abs / votos_2023 if votos_2023 else np.nan
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Votos 2026", formato_numero(votos_2026))
+c2.metric("Votos 2023", formato_numero(votos_2023))
+c3.metric("Variacion electoral", formato_numero(var_abs), delta=formato_numero(var_abs))
+c4.metric("Variacion porcentual", formato_pct(var_pct), delta=formato_pct(var_pct))
+c5, c6, c7, c8 = st.columns(4)
+c5.metric("Puestos analizados", formato_numero(puestos["PUESTO_ID"].nunique()))
+c6.metric("Actividades de campana", formato_numero(len(actividades)))
+c7.metric("Mesas de trabajo", formato_numero(len(mesas)))
+c8.metric("Iglesias oficiales", formato_numero(len(IGLESIAS_OFICIALES)))
+
+tabs = st.tabs(
+    [
+        "Resumen ejecutivo",
+        "Mapa territorial",
+        "Analisis por iglesia",
+        "Analisis por puesto",
+        "Barrio / UPZ",
+        "Priorizacion",
+        "Exportables",
+    ]
+)
+
+with tabs[0]:
+    st.subheader("Resumen ejecutivo")
+    for _, row in informe.iterrows():
+        with st.expander(row["SECCION"], expanded=row["SECCION"] in ["Resumen general", "Hallazgos principales"]):
+            st.write(row["TEXTO"])
+
+    col_a, col_b = st.columns([1.1, 1])
+    with col_a:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.write("Lectura tecnica")
+        st.write(
+            "El analisis principal excluye registros sin clasificar para mantener consistencia institucional. "
+            "La priorizacion combina concentracion territorial, variacion electoral, eficiencia territorial de campana y presencia comunitaria."
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        if not matriz.empty:
+            st.dataframe(
+                matriz.sort_values(["NIVEL_PRIORIDAD", "VOTOS_2026"], ascending=[True, False]).head(12),
+                use_container_width=True,
             )
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                st.dataframe(
-                    df_i[["PUESTO", "BARRIO", "UPZ", "PROMEDIO_2026", "PROMEDIO_2023", "VARIACION_ABS", "VARIACION_PCT", "PRIORIDAD"]].sort_values("PROMEDIO_2026", ascending=False),
-                    use_container_width=True,
-                )
-            with col2:
-                fig = px.bar(
-                    df_i.sort_values("VARIACION_ABS").tail(12),
-                    x="VARIACION_ABS",
-                    y="PUESTO",
-                    orientation="h",
-                    title=f"Variacion absoluta por puesto · {iglesia}",
-                    color="VARIACION_ABS",
-                    color_continuous_scale=["#C62828", "#E5E7EB", "#2E7D32"],
-                )
-                fig.update_layout(height=420, coloraxis_showscale=False)
-                st.plotly_chart(fig, use_container_width=True)
-            with st.expander("Lectura estrategica"):
-                mejor = df_i.sort_values("VARIACION_ABS", ascending=False).iloc[0]
-                peor = df_i.sort_values("VARIACION_ABS", ascending=True).iloc[0]
-                st.write(
-                    f"{iglesia} suma {formato_numero(df_i['PROMEDIO_2026'].sum())} votos 2026. "
-                    f"El puesto que mas crece es {mejor['PUESTO']} y el punto mas critico es {peor['PUESTO']}. "
-                    "La recomendacion es concentrar gestion donde hay alta votacion y baja presencia registrada."
-                )
-
-with tab_graficas:
-    st.subheader("Graficas profesionales")
-    if not resumen_iglesia.empty:
-        col1, col2 = st.columns(2)
-        with col1:
-            fig = px.bar(resumen_iglesia.sort_values("votos_2026"), x="votos_2026", y="IGLESIA", orientation="h", title="Votos 2026 por iglesia", color_discrete_sequence=[COLORES["azul"]])
-            fig.update_layout(height=430)
-            st.plotly_chart(fig, use_container_width=True)
-        with col2:
-            fig = px.pie(resumen_iglesia, names="IGLESIA", values="votos_2026", hole=0.55, title="Participacion por iglesia", color_discrete_sequence=px.colors.qualitative.Set2)
-            fig.update_layout(height=430)
-            st.plotly_chart(fig, use_container_width=True)
-    col3, col4 = st.columns(2)
-    with col3:
-        top_crece = puestos_f.sort_values("VARIACION_ABS", ascending=False).head(10)
-        fig = px.bar(top_crece.sort_values("VARIACION_ABS"), x="VARIACION_ABS", y="PUESTO", orientation="h", title="Top 10 crecimiento", color_discrete_sequence=[COLORES["verde"]])
-        fig.update_layout(height=430)
-        st.plotly_chart(fig, use_container_width=True)
-    with col4:
-        top_cae = puestos_f.sort_values("VARIACION_ABS", ascending=True).head(10)
-        fig = px.bar(top_cae.sort_values("VARIACION_ABS", ascending=False), x="VARIACION_ABS", y="PUESTO", orientation="h", title="Top 10 caida", color_discrete_sequence=[COLORES["rojo"]])
-        fig.update_layout(height=430)
+    with col_b:
+        fig = px.bar(
+            resumen_iglesia.sort_values("VOTOS_2026"),
+            x="VOTOS_2026",
+            y="IGLESIA",
+            orientation="h",
+            title="Concentracion territorial de votos 2026 por iglesia",
+            color_discrete_sequence=[COLORES["azul"]],
+        )
+        fig.update_layout(height=420, font_color=COLORES["texto"], paper_bgcolor=COLORES["tarjeta"], plot_bgcolor=COLORES["tarjeta"])
         st.plotly_chart(fig, use_container_width=True)
 
-    puestos_plot = puestos_f.copy()
-    puestos_plot["ACTIVIDADES_CERCANAS"] = puestos_plot["ACTIVIDADES_CERCANAS"].clip(lower=1)
+    with st.expander("Control de calidad: registros sin clasificar"):
+        st.write("Estos registros no entran al analisis principal hasta que se pueda asignar una iglesia oficial.")
+        q1, q2, q3 = st.columns(3)
+        q1.metric("Puestos sin clasificar", formato_numero(len(puestos_qc)))
+        q2.metric("Actividades sin clasificar", formato_numero(len(actividades_qc)))
+        q3.metric("Mesas sin clasificar", formato_numero(len(mesas_qc)))
+        if not puestos_qc.empty:
+            st.dataframe(puestos_qc[["PUESTO", "IGLESIA", "BARRIO", "UPZ", "VOTOS_2026", "VOTOS_2023"]], use_container_width=True)
+
+with tabs[1]:
+    st.subheader("Mapa territorial")
+    st_folium(crear_mapa(puestos, iglesias, actividades, mesas), width=None, height=720)
+    with st.expander("Como leer el mapa"):
+        st.write(
+            "Los puestos aparecen en verde cuando tienen crecimiento, rojo cuando presentan caida y gris cuando no hay comparacion. "
+            "Las iglesias oficiales tienen icono destacado y nombre visible. Las capas permiten evaluar presencia comunitaria, actividades de campana y mapa de calor electoral."
+        )
+
+with tabs[2]:
+    st.subheader("Analisis por iglesia")
+    st.dataframe(resumen_iglesia.sort_values("VOTOS_2026", ascending=False), use_container_width=True)
+    for iglesia in IGLESIAS_OFICIALES:
+        datos_i = puestos[puestos["IGLESIA"].eq(iglesia)]
+        resumen_i = resumen_iglesia[resumen_iglesia["IGLESIA"].eq(iglesia)]
+        with st.expander(iglesia, expanded=not datos_i.empty):
+            if datos_i.empty:
+                st.write("Sin puestos oficiales asociados en la base consolidada filtrada.")
+                continue
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Votos 2026", formato_numero(datos_i["VOTOS_2026"].sum()))
+            k2.metric("Votos 2023", formato_numero(datos_i["VOTOS_2023"].sum()))
+            k3.metric("Variacion", formato_numero(datos_i["VARIACION_ABSOLUTA"].sum()))
+            k4.metric("Puestos", formato_numero(datos_i["PUESTO_ID"].nunique()))
+            if not resumen_i.empty:
+                st.write(resumen_i.iloc[0].get("LECTURA_ESTRATEGICA", ""))
+                st.info(resumen_i.iloc[0].get("RECOMENDACION", ""))
+            fig = px.bar(
+                datos_i.sort_values("VARIACION_ABSOLUTA"),
+                x="VARIACION_ABSOLUTA",
+                y="PUESTO",
+                orientation="h",
+                title=f"Variacion electoral por puesto · {iglesia}",
+                color="VARIACION_ABSOLUTA",
+                color_continuous_scale=[COLORES["rojo"], "#E5E7EB", COLORES["verde"]],
+            )
+            fig.update_layout(height=430, coloraxis_showscale=False)
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(datos_i[["PUESTO", "BARRIO", "UPZ", "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "PRIORIDAD", "ACCION_RECOMENDADA"]], use_container_width=True)
+
+with tabs[3]:
+    st.subheader("Analisis por puesto")
+    col1, col2 = st.columns(2)
+    with col1:
+        top_crece = puestos.sort_values("VARIACION_ABSOLUTA", ascending=False).head(10)
+        fig = px.bar(top_crece.sort_values("VARIACION_ABSOLUTA"), x="VARIACION_ABSOLUTA", y="PUESTO", orientation="h", title="Top 10 puestos con mayor crecimiento", color_discrete_sequence=[COLORES["verde"]])
+        fig.update_layout(height=430)
+        st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        top_cae = puestos.sort_values("VARIACION_ABSOLUTA", ascending=True).head(10)
+        fig = px.bar(top_cae.sort_values("VARIACION_ABSOLUTA", ascending=False), x="VARIACION_ABSOLUTA", y="PUESTO", orientation="h", title="Top 10 puestos con mayor caida", color_discrete_sequence=[COLORES["rojo"]])
+        fig.update_layout(height=430)
+        st.plotly_chart(fig, use_container_width=True)
+
     fig = px.scatter(
-        puestos_plot,
-        x="PROMEDIO_2026",
-        y="VARIACION_PCT",
-        size="ACTIVIDADES_CERCANAS",
+        puestos,
+        x="VOTOS_2026",
+        y="VARIACION_ABSOLUTA",
         color="PRIORIDAD",
+        size=np.maximum(puestos["ACTIVIDADES_CAMPANA"], 1),
         hover_name="PUESTO",
-        hover_data=["IGLESIA", "BARRIO", "UPZ", "MESAS_CERCANAS"],
-        title="Votos 2026 vs variacion porcentual",
-        color_discrete_map={"Alta": COLORES["rojo"], "Media": COLORES["naranja"], "Baja": COLORES["verde"]},
+        hover_data=["IGLESIA", "BARRIO", "UPZ", "MESAS_TRABAJO_BARRIO"],
+        title="Votos 2026 vs variacion absoluta",
+        color_discrete_map={"ALTA": COLORES["rojo"], "MEDIA": COLORES["naranja"], "BAJA": COLORES["verde"]},
     )
     fig.update_layout(height=520)
     st.plotly_chart(fig, use_container_width=True)
+    st.dataframe(puestos.sort_values("VOTOS_2026", ascending=False), use_container_width=True)
 
-    matriz = puestos_f.pivot_table(index="IGLESIA", columns="UPZ", values="PROMEDIO_2026", aggfunc="sum", fill_value=0)
-    if not matriz.empty:
-        fig = px.imshow(matriz, text_auto=True, aspect="auto", title="Matriz iglesia vs UPZ por votos 2026", color_continuous_scale="Blues")
-        fig.update_layout(height=520)
+with tabs[4]:
+    st.subheader("Analisis por barrio / UPZ")
+    st.dataframe(resumen_barrio, use_container_width=True)
+    if not resumen_barrio.empty:
+        col1, col2 = st.columns(2)
+        with col1:
+            fig = px.bar(
+                resumen_barrio.head(15).sort_values("VOTOS_2026"),
+                x="VOTOS_2026",
+                y="BARRIO",
+                orientation="h",
+                title="Concentracion territorial por barrio",
+                color_discrete_sequence=[COLORES["azul"]],
+            )
+            fig.update_layout(height=460)
+            st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            matriz_barrio = puestos.pivot_table(index="BARRIO", columns="IGLESIA", values="VOTOS_2026", aggfunc="sum", fill_value=0)
+            if matriz_barrio.shape[0] > 1 and matriz_barrio.shape[1] > 1:
+                fig = px.imshow(matriz_barrio, text_auto=True, aspect="auto", title="Matriz barrio / iglesia", color_continuous_scale="Blues")
+                fig.update_layout(height=460)
+                st.plotly_chart(fig, use_container_width=True)
+
+with tabs[5]:
+    st.subheader("Priorizacion de intervencion")
+    st.dataframe(matriz.sort_values(["NIVEL_PRIORIDAD", "VOTOS_2026"], ascending=[True, False]), use_container_width=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        conteo = matriz["NIVEL_PRIORIDAD"].value_counts().rename_axis("NIVEL_PRIORIDAD").reset_index(name="PUESTOS")
+        fig = px.bar(conteo, x="NIVEL_PRIORIDAD", y="PUESTOS", title="Puestos por nivel de prioridad", color="NIVEL_PRIORIDAD", color_discrete_map={"ALTA": COLORES["rojo"], "MEDIA": COLORES["naranja"], "BAJA": COLORES["verde"]})
         st.plotly_chart(fig, use_container_width=True)
-    with st.expander("Como leer estos graficos"):
-        st.write("Las barras muestran concentracion y cambios; el scatter cruza volumen electoral con desempeno; la matriz permite ver donde se superponen iglesias y UPZ.")
+    with col2:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.write("Criterio analitico")
+        st.write(
+            "ALTA: caida con votacion relevante, alta votacion con baja actividad, alta votacion sin mesas, o brecha entre gestion y resultado electoral. "
+            "MEDIA: oportunidad de crecimiento o consolidacion. BAJA: baja votacion o informacion insuficiente."
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
 
-with tab_priorizacion:
-    st.subheader("Matriz de priorizacion")
-    st.dataframe(
-        matriz_priorizacion[[
-            "PRIORIDAD",
-            "PUESTO",
-            "IGLESIA",
-            "BARRIO",
-            "UPZ",
-            "PROMEDIO_2026",
-            "PROMEDIO_2023",
-            "VARIACION_ABS",
-            "VARIACION_PCT",
-            "RAZON_PRIORIDAD",
-            "ACCION_RECOMENDADA",
-            "RESPONSABLE_SUGERIDO",
-            "TEMPORALIDAD_SUGERIDA",
-        ]],
-        use_container_width=True,
-    )
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Resumen por UPZ")
-        st.dataframe(resumen_upz, use_container_width=True)
-    with c2:
-        st.subheader("Resumen por barrio")
-        st.dataframe(resumen_barrio.head(30), use_container_width=True)
-    with st.expander("Recomendacion estrategica"):
-        st.write("Prioridad alta combina caida fuerte, votacion relevante y ausencia de presencia territorial registrada. Prioridad media senala oportunidades de consolidacion.")
-
-with tab_informe:
-    st.subheader("Informe ejecutivo automatico")
-    informe = [
-        f"El tablero consolida {formato_numero(puestos_f['PUESTO_KEY'].nunique())} puestos de votacion, {formato_numero(len(agenda_f))} actividades de campana y {formato_numero(len(mesas_f))} mesas o gestiones.",
-        f"El acumulado filtrado muestra {formato_numero(votos_2026)} votos 2026 frente a {formato_numero(votos_2023)} votos 2023, con variacion de {formato_numero(var_abs)} votos ({formato_pct(var_pct)}).",
-    ]
-    if hallazgos_auto:
-        informe.append("Hallazgos principales: " + " ".join(hallazgos_auto))
-    altas = matriz_priorizacion[matriz_priorizacion["PRIORIDAD"] == "Alta"].head(5)
-    if not altas.empty:
-        informe.append("Puestos criticos para agenda territorial: " + ", ".join(altas["PUESTO"].astype(str)) + ".")
-    if not resumen_upz.empty:
-        informe.append("Analisis por UPZ: priorizar " + ", ".join(resumen_upz.head(5)["UPZ"].astype(str)) + " por concentracion electoral y senales de presencia territorial.")
-    informe.append("Recomendacion: combinar visitas a puestos de alta votacion, mesas de gestion en zonas sin cobertura y seguimiento quincenal a barrios con actividad sin crecimiento.")
-    st.markdown("\n\n".join(informe))
-    with st.expander("Agenda territorial sugerida"):
-        st.write("Semana 1: puestos prioridad alta y barrios sin mesas. Semana 2: consolidacion de iglesias con crecimiento. Semana 3: UPZ con concentracion electoral y baja presencia territorial. Semana 4: revision de resultados y actualizacion de matriz.")
-
-with tab_exportables:
+with tabs[6]:
     st.subheader("Exportables")
-    resumen_puesto = matriz_priorizacion.copy()
-    descargas = {
+    hojas_export = {
+        "puestos_votacion": puestos,
+        "actividades_campana": actividades,
+        "mesas_trabajo": mesas,
+        "iglesias": iglesias,
         "resumen_iglesia": resumen_iglesia,
-        "resumen_puesto": resumen_puesto,
         "resumen_barrio": resumen_barrio,
-        "resumen_upz": resumen_upz,
-        "matriz_priorizacion": matriz_priorizacion,
+        "matriz_priorizacion": matriz,
+        "informe_ejecutivo": informe,
     }
     cols = st.columns(3)
-    for idx, (nombre, df) in enumerate(descargas.items()):
+    for idx, (nombre, df) in enumerate(hojas_export.items()):
         cols[idx % 3].download_button(
             f"Descargar {nombre}.csv",
-            data=to_csv_bytes(df),
+            data=csv_bytes(df),
             file_name=f"{nombre}.csv",
             mime="text/csv",
         )
     st.download_button(
-        "Descargar Excel consolidado",
-        data=construir_excel(descargas),
-        file_name="dashboard_kennedy_mira_consolidado.xlsx",
+        "Descargar Excel filtrado",
+        data=excel_bytes(hojas_export),
+        file_name="kennedy_mira_dashboard_filtrado.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    st.download_button(
+        "Descargar base maestra consolidada",
+        data=ARCHIVO_CONSOLIDADO.read_bytes(),
+        file_name="kennedy_mira_consolidado.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
