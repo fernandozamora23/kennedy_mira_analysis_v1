@@ -480,7 +480,42 @@ resumen_puesto = data["resumen_puesto"]
 resumen_barrio = data["resumen_barrio"]
 matriz = data["matriz"]
 informe = data["informe"]
-control = data["control"]
+control = data.get("control", pd.DataFrame())
+
+# Filtrar iglesias oficiales permitidas
+IGLESIAS_OFICIALES_PERMITIDAS = ["CLASS ROMA", "KENNEDY CENTRAL", "PATIO BONITO", "CARVAJAL", "VALLADOLID"]
+
+def filtrar_iglesias(df):
+    if df is not None and not df.empty and "IGLESIA" in df.columns:
+        return df[df["IGLESIA"].isin(IGLESIAS_OFICIALES_PERMITIDAS)].copy()
+    return df
+
+# Agregar los registros descartados a control de calidad
+def agregar_a_control(df, nombre_origen):
+    global control
+    if df is not None and not df.empty and "IGLESIA" in df.columns:
+        descartados = df[~df["IGLESIA"].isin(IGLESIAS_OFICIALES_PERMITIDAS)].copy()
+        if not descartados.empty:
+            descartados["ORIGEN_ERROR"] = f"Iglesia no oficial en {nombre_origen}"
+            if control is None or control.empty:
+                control = pd.DataFrame(columns=descartados.columns)
+            # Añadir columnas faltantes a control
+            for col in descartados.columns:
+                if col not in control.columns:
+                    control[col] = pd.Series(dtype=descartados[col].dtype)
+            control = pd.concat([control, descartados], ignore_index=True)
+
+agregar_a_control(puestos, "puestos")
+agregar_a_control(actividades, "actividades")
+agregar_a_control(mesas, "mesas")
+agregar_a_control(iglesias, "iglesias")
+agregar_a_control(resumen_iglesia, "resumen_iglesia")
+
+puestos = filtrar_iglesias(puestos)
+actividades = filtrar_iglesias(actividades)
+mesas = filtrar_iglesias(mesas)
+iglesias = filtrar_iglesias(iglesias)
+resumen_iglesia = filtrar_iglesias(resumen_iglesia)
 
 # Ensure numerics
 for df in [puestos, resumen_iglesia, resumen_puesto, resumen_barrio, matriz]:
@@ -498,7 +533,7 @@ with st.sidebar:
     st.header("Configuración del análisis")
     st.markdown("Fuente única: `kennedy_mira_consolidado.xlsx`")
 
-    iglesias_oficiales = iglesias["IGLESIA"].dropna().tolist() if not iglesias.empty else sorted(puestos["IGLESIA"].dropna().unique())
+    iglesias_oficiales = IGLESIAS_OFICIALES_PERMITIDAS
     default_iglesias = [i for i in iglesias_oficiales if i in puestos["IGLESIA"].unique()]
     selected_iglesias = st.multiselect("Iglesias / templos", iglesias_oficiales, default=default_iglesias)
 
