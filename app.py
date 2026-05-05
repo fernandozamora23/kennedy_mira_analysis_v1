@@ -22,7 +22,7 @@ except ImportError:
 st.set_page_config(page_title="Informe Kennedy MIRA 2026", layout="wide")
 
 # =============================
-# 1. CONFIGURACIÓN DE ARCHIVOS
+# 1. CONFIGURACIÓN GENERAL
 # =============================
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -54,19 +54,6 @@ def resolve_data_file(*candidate_names):
 
     return DATA_DIR / candidate_names[0]
 
-
-ARCHIVO_CAMPANA = resolve_data_file(
-    "CAMPAÑA CONGRESO 2026 KENNEDY (1).xlsx",
-    "CAMPAÑA CONGRESO 2026 KENNEDY.xlsx",
-)
-ARCHIVO_GESTION = resolve_data_file(
-    "Copia de Gestión Edil Lorena Garzón - 17 de febrero, 17_07.xlsx",
-    "GESTION_EDIL_LORENA.xlsx",
-)
-ARCHIVO_VOTACION = resolve_data_file(
-    "VOTACIÓN 2026.xlsx",
-    "VOTACION_2026.xlsx",
-)
 
 # GeoJSON opcional: descargue desde IDECA/Datos Abiertos Bogotá una capa de UPZ o UPL
 # y guárdela como data/kennedy_upz.geojson o data/kennedy_upl.geojson.
@@ -124,30 +111,64 @@ def asignar_temporada(fecha):
     return "DESPUÉS DE ELECCIÓN"
 
 
-def leer_excel_seguro(path, sheet_name):
-    return pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
+def leer_excel_seguro(archivo_cargado, sheet_name):
+    archivo_cargado.seek(0)
+    return pd.read_excel(archivo_cargado, sheet_name=sheet_name, engine="openpyxl")
+
+
+def obtener_hojas_excel(archivo_cargado):
+    archivo_cargado.seek(0)
+    hojas = pd.ExcelFile(archivo_cargado, engine="openpyxl").sheet_names
+    archivo_cargado.seek(0)
+    return hojas
+
+
+def seleccionar_hoja(archivo_cargado, etiqueta, preferidas, key):
+    hojas = obtener_hojas_excel(archivo_cargado)
+    if not hojas:
+        st.sidebar.warning(f"El archivo para {etiqueta} no tiene hojas disponibles.")
+        return None
+
+    preferidas_norm = [normalizar_texto(nombre) for nombre in preferidas]
+    indice_default = 0
+    for i, hoja in enumerate(hojas):
+        if normalizar_texto(hoja) in preferidas_norm:
+            indice_default = i
+            break
+
+    if len(hojas) == 1:
+        st.sidebar.caption(f"{etiqueta}: {hojas[0]}")
+        return hojas[0]
+
+    return st.sidebar.selectbox(etiqueta, hojas, index=indice_default, key=key)
 
 # =============================
 # 3. CARGA DE DATOS
 # =============================
-@st.cache_data(show_spinner=False)
-def cargar_datos():
+def cargar_datos(
+    archivo_votacion,
+    hoja_puestos,
+    hoja_detalle_puestos,
+    archivo_campana,
+    hoja_agenda_general,
+    hoja_agenda_paralela,
+    hoja_mesas_campana,
+    archivo_gestion,
+    hoja_gestion,
+):
     # Votación 2026 / comparativo 2023
-    puestos = limpiar_columnas(leer_excel_seguro(ARCHIVO_VOTACION, "Hoja 5"))
-    detalle_puestos = limpiar_columnas(leer_excel_seguro(ARCHIVO_VOTACION, "Hoja 3"))
+    puestos = limpiar_columnas(leer_excel_seguro(archivo_votacion, hoja_puestos))
+    detalle_puestos = limpiar_columnas(leer_excel_seguro(archivo_votacion, hoja_detalle_puestos))
 
     # Agendas de campaña
-    agenda_general = limpiar_columnas(leer_excel_seguro(ARCHIVO_CAMPANA, "AGENDA GENERAL CON CANDIDATOS"))
-    agenda_paralela = limpiar_columnas(leer_excel_seguro(ARCHIVO_CAMPANA, "AGENDA PARALELA"))
-    mesas_campana = limpiar_columnas(leer_excel_seguro(ARCHIVO_CAMPANA, "Mesas"))
+    agenda_general = limpiar_columnas(leer_excel_seguro(archivo_campana, hoja_agenda_general))
+    agenda_paralela = limpiar_columnas(leer_excel_seguro(archivo_campana, hoja_agenda_paralela))
+    mesas_campana = limpiar_columnas(leer_excel_seguro(archivo_campana, hoja_mesas_campana))
 
     agenda = pd.concat([agenda_general, agenda_paralela], ignore_index=True)
 
-    # Gestión edil / mesas, si existe la hoja
-    try:
-        gestion = limpiar_columnas(leer_excel_seguro(ARCHIVO_GESTION, "SEGUIMIENTO MESAS DE TRABAJO"))
-    except Exception:
-        gestion = pd.DataFrame()
+    # Gestión edil / mesas de trabajo
+    gestion = limpiar_columnas(leer_excel_seguro(archivo_gestion, hoja_gestion))
 
     # Coordenadas puestos
     if "COORDENADAS" in detalle_puestos.columns:
@@ -196,13 +217,66 @@ def cargar_datos():
 
     return puestos, detalle_puestos, agenda, mesas_campana, gestion
 
-puestos, detalle_puestos, agenda, mesas_campana, gestion = cargar_datos()
-
 # =============================
 # 4. FILTROS
 # =============================
 st.title("Informe territorial y electoral Kennedy — Partido MIRA")
 st.caption("Congreso 2026 · Concejo/JAL 2023 · Campaña territorial · Mesas de trabajo")
+
+st.sidebar.header("Archivos Excel")
+archivo_votacion = st.sidebar.file_uploader("Archivo de votación", type=["xlsx", "xls"], key="archivo_votacion")
+archivo_campana = st.sidebar.file_uploader("Archivo de campaña", type=["xlsx", "xls"], key="archivo_campana")
+archivo_gestion = st.sidebar.file_uploader("Archivo de gestión o mesas de trabajo", type=["xlsx", "xls"], key="archivo_gestion")
+
+if not all([archivo_votacion, archivo_campana, archivo_gestion]):
+    st.info("Carga los tres archivos Excel desde la barra lateral para iniciar el análisis.")
+    st.stop()
+
+try:
+    hoja_puestos = seleccionar_hoja(archivo_votacion, "Hoja de votación - puestos", ["Hoja 5"], "hoja_puestos")
+    hoja_detalle_puestos = seleccionar_hoja(archivo_votacion, "Hoja de votación - detalle puestos", ["Hoja 3"], "hoja_detalle_puestos")
+    hoja_agenda_general = seleccionar_hoja(
+        archivo_campana,
+        "Hoja de campaña - agenda general",
+        ["AGENDA GENERAL CON CANDIDATOS"],
+        "hoja_agenda_general",
+    )
+    hoja_agenda_paralela = seleccionar_hoja(
+        archivo_campana,
+        "Hoja de campaña - agenda paralela",
+        ["AGENDA PARALELA"],
+        "hoja_agenda_paralela",
+    )
+    hoja_mesas_campana = seleccionar_hoja(archivo_campana, "Hoja de campaña - mesas", ["Mesas"], "hoja_mesas_campana")
+    hoja_gestion = seleccionar_hoja(
+        archivo_gestion,
+        "Hoja de gestión o mesas de trabajo",
+        ["SEGUIMIENTO MESAS DE TRABAJO"],
+        "hoja_gestion",
+    )
+except Exception as e:
+    st.error(f"No se pudieron leer las hojas de los archivos Excel: {e}")
+    st.stop()
+
+if not all([hoja_puestos, hoja_detalle_puestos, hoja_agenda_general, hoja_agenda_paralela, hoja_mesas_campana, hoja_gestion]):
+    st.warning("Selecciona hojas válidas para continuar con el análisis.")
+    st.stop()
+
+try:
+    puestos, detalle_puestos, agenda, mesas_campana, gestion = cargar_datos(
+        archivo_votacion,
+        hoja_puestos,
+        hoja_detalle_puestos,
+        archivo_campana,
+        hoja_agenda_general,
+        hoja_agenda_paralela,
+        hoja_mesas_campana,
+        archivo_gestion,
+        hoja_gestion,
+    )
+except Exception as e:
+    st.error(f"No se pudieron cargar los datos seleccionados: {e}")
+    st.stop()
 
 iglesias = sorted([x for x in puestos.get("IGLESIA_KEY", pd.Series(dtype=str)).dropna().unique()])
 iglesia_sel = st.sidebar.multiselect("Iglesia / sede responsable", iglesias, default=iglesias)
