@@ -1,0 +1,11 @@
+Probando https://raw.githubusercontent.com/ljgomezz/Bogota-GeoJSON/master/UPZ.geojson
+Error: HTTP Error 404: Not Found
+Probando https://raw.githubusercontent.com/danielm-12/bogota_maps/master/data/upz.geojson
+Error: HTTP Error 404: Not Found
+Probando https://raw.githubusercontent.com/jorge-castaneda/BogotaGeoJSON/master/upz.geojson
+Error: HTTP Error 404: Not Found
+Probando https://raw.githubusercontent.com/finiterank/mapa-bogota/master/data/upz.geojson
+Error: HTTP Error 404: Not Found
+Probando https://raw.githubusercontent.com/scadare/bogota_upz/master/upz.geojson
+Error: HTTP Error 404: Not Found
+No se pudo descargar de ninguna URL.

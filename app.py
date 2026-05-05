@@ -13,6 +13,7 @@ import folium
 from folium.plugins import MarkerCluster, HeatMap, Fullscreen, MiniMap
 from streamlit_folium import st_folium
 
+st.cache_data.clear()
 
 # ============================================================
 # CONFIGURACIÓN
@@ -326,6 +327,10 @@ def aplicar_filtros(puestos, actividades, mesas, filtros):
     if prioridad_sel and "PRIORIDAD" in puestos_f.columns:
         puestos_f = puestos_f[puestos_f["PRIORIDAD"].isin(prioridad_sel)]
 
+    if "ESTRATEGIA" in acts_f.columns:
+        valid_estrategias = ["LIBERTAD RELIGIOSA", "POLITICO COMUNITARIA", "POLÍTICO COMUNITARIA"]
+        acts_f = acts_f[acts_f["ESTRATEGIA"].str.strip().str.upper().isin(valid_estrategias)]
+
     return puestos_f, acts_f, mesas_f
 
 
@@ -550,8 +555,6 @@ with st.sidebar:
     st.divider()
     if UPZ_GEOJSON.exists():
         st.success("Capa UPZ detectada.")
-    else:
-        st.info("No hay GeoJSON de UPZ. El tablero usará la columna UPZ si existe.")
 
 
 puestos_f, actividades_f, mesas_f = aplicar_filtros(
@@ -580,7 +583,12 @@ total_2023 = get_indicador(resumen_general, "Total Kennedy votos promedio 2023")
 var_abs = get_indicador(resumen_general, "Variación absoluta Kennedy")
 var_pct = get_indicador(resumen_general, "Variación porcentual Kennedy")
 puestos_total = get_indicador(resumen_general, "Puestos totales analizados")
-actividades_total = get_indicador(resumen_general, "Actividades de campaña consolidadas")
+
+if "ESTRATEGIA" in actividades_f.columns:
+    actividades_total = len(actividades_f)
+else:
+    actividades_total = get_indicador(resumen_general, "Actividades de campaña consolidadas")
+
 mesas_total = get_indicador(resumen_general, "Mesas incorporadas reporte Bogotá Tecnología Kennedy")
 iglesias_total = get_indicador(resumen_general, "Iglesias oficiales")
 
@@ -664,6 +672,27 @@ with tab_resumen:
         )
         fig.update_layout(height=420, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
         st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("### Desglose de actividades de campaña")
+    if not actividades_f.empty and "TIPO_ACTIVIDAD" in actividades_f.columns:
+        acts_counts = actividades_f["TIPO_ACTIVIDAD"].fillna("NO ESPECIFICADO").value_counts().reset_index()
+        acts_counts.columns = ["Tipo de Actividad", "Cantidad"]
+        fig_acts = px.bar(
+            acts_counts.sort_values("Cantidad", ascending=True),
+            x="Cantidad",
+            y="Tipo de Actividad",
+            orientation="h",
+            title="Distribución por tipo",
+        )
+        fig_acts.update_layout(height=350, showlegend=False, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
+        
+        ca1, ca2 = st.columns([1, 2])
+        with ca1:
+            st.dataframe(acts_counts, use_container_width=True, hide_index=True)
+        with ca2:
+            st.plotly_chart(fig_acts, use_container_width=True)
+    else:
+        st.info("No hay actividades para desglosar con los filtros actuales.")
 
 with tab_mapa:
     st.subheader("Mapa interactivo territorial")
