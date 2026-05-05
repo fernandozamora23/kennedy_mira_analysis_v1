@@ -581,7 +581,7 @@ var_abs = get_indicador(resumen_general, "Variación absoluta Kennedy")
 var_pct = get_indicador(resumen_general, "Variación porcentual Kennedy")
 puestos_total = get_indicador(resumen_general, "Puestos totales analizados")
 actividades_total = get_indicador(resumen_general, "Actividades de campaña consolidadas")
-mesas_total = get_indicador(resumen_general, "Mesas de trabajo consolidadas")
+mesas_total = get_indicador(resumen_general, "Mesas incorporadas reporte Bogotá Tecnología Kennedy")
 iglesias_total = get_indicador(resumen_general, "Iglesias oficiales")
 
 c1, c2, c3, c4 = st.columns(4)
