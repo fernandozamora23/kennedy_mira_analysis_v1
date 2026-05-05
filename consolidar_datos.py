@@ -13,6 +13,7 @@ ARCHIVO_VOTACION = DATA_DIR / "VOTACIÓN 2026.xlsx"
 ARCHIVO_SALIDA = DATA_DIR / "kennedy_mira_consolidado.xlsx"
 
 IGLESIAS_OFICIALES = ["CLASS ROMA", "KENNEDY CENTRAL", "PATIO BONITO", "CARVAJAL", "VALLADOLID"]
+IGLESIAS_HISTORICAS_ANALISIS = ["CLASS ROMA", "KENNEDY CENTRAL", "PATIO BONITO", "CARVAJAL"]
 
 IGLESIAS_BASE = pd.DataFrame(
     [
@@ -41,6 +42,22 @@ def normalizar_texto(valor):
     texto = str(valor).strip().upper()
     texto = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("utf-8")
     texto = re.sub(r"[^A-Z0-9\s]", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
+
+
+def normalizar_puesto_match(valor):
+    texto = normalizar_texto(valor)
+    reemplazos = {
+        "COLEGIO": "COL",
+        "COL ": "COL ",
+        "DISTRITAL": "DIST",
+        "INSTITUCION EDUCATIVA": "IED",
+    }
+    for origen, destino in reemplazos.items():
+        texto = re.sub(rf"\b{origen}\b", destino, texto)
+    texto = re.sub(r"\bIED\b", "", texto)
+    texto = re.sub(r"\bSEDE\b", "SEDE", texto)
     texto = re.sub(r"\s+", " ", texto).strip()
     return texto
 
@@ -130,10 +147,8 @@ def iglesia_mas_cercana(latitud, longitud):
     return sorted(distancias, key=lambda x: x[0])[0][1]
 
 
-def normalizar_iglesia_territorial(iglesia, barrio="", puesto="", latitud=np.nan, longitud=np.nan):
-    iglesia_norm = normalizar_iglesia(iglesia)
-    if iglesia_norm != "SIN CLASIFICAR":
-        return iglesia_norm
+def sugerir_iglesia_actual(iglesia_historica, barrio="", puesto="", latitud=np.nan, longitud=np.nan):
+    iglesia_norm = normalizar_iglesia(iglesia_historica)
 
     contexto = " ".join([normalizar_texto(barrio), normalizar_texto(puesto)])
     if any(token in contexto for token in ["CASTILLA", "TABAKU", "TABACU", "TIBAKU"]):
@@ -146,7 +161,18 @@ def normalizar_iglesia_territorial(iglesia, barrio="", puesto="", latitud=np.nan
         return "CLASS ROMA"
     if "KENNEDY" in contexto or "BRITALIA" in contexto:
         return "KENNEDY CENTRAL"
-    return iglesia_mas_cercana(latitud, longitud)
+    cercana = iglesia_mas_cercana(latitud, longitud)
+    return cercana if cercana != "SIN CLASIFICAR" else iglesia_norm
+
+
+def construir_marca_reasignacion(iglesia_historica, iglesia_sugerida):
+    if iglesia_sugerida == "SIN CLASIFICAR" or iglesia_historica == "SIN CLASIFICAR":
+        return "SIN SUGERENCIA"
+    if iglesia_historica == iglesia_sugerida:
+        return "MISMA IGLESIA"
+    if iglesia_sugerida == "VALLADOLID":
+        return "SUGERIDO VALLADOLID POR CERCANIA TERRITORIAL ACTUAL"
+    return "SUGERENCIA TERRITORIAL ACTUAL"
 
 
 def construir_puestos():
@@ -155,15 +181,18 @@ def construir_puestos():
 
     puestos["PUESTO"] = valor_columna(puestos, ["PUESTO_DE_VOTACION", "PUESTO"]).astype(str).str.strip()
     puestos["PUESTO_ID"] = puestos["PUESTO"].apply(normalizar_texto)
+    puestos["PUESTO_MATCH"] = puestos["PUESTO"].apply(normalizar_puesto_match)
     puestos["IGLESIA"] = valor_columna(puestos, ["IGLESIA_RESPONSABLE", "IGLESIA"]).apply(normalizar_iglesia)
     puestos["VOTOS_2026"] = pd.to_numeric(valor_columna(puestos, ["PROMEDIO_2026", "TOTAL_"]), errors="coerce").fillna(0)
     puestos["VOTOS_2023"] = pd.to_numeric(valor_columna(puestos, ["PROMEDIO_2023"]), errors="coerce").fillna(0)
 
     detalle["PUESTO"] = valor_columna(detalle, ["PUESTO_DE_VOTACION", "PUESTO"]).astype(str).str.strip()
     detalle["PUESTO_ID"] = detalle["PUESTO"].apply(normalizar_texto)
+    detalle["PUESTO_MATCH"] = detalle["PUESTO"].apply(normalizar_puesto_match)
     detalle["DIRECCION"] = valor_columna(detalle, ["DIRECCION", "DIRECCION_"]).replace("", np.nan)
     detalle["BARRIO"] = valor_columna(detalle, ["BARRIO", "BARRIO_"]).replace("", np.nan)
     detalle["UPZ"] = valor_columna(detalle, ["UPZ", "ZONA"]).replace("", np.nan)
+    detalle["IGLESIA_DETALLE"] = valor_columna(detalle, ["IGLESIA_RESPONSABLE", "IGLESIA"]).apply(normalizar_iglesia)
     if "COORDENADAS" in detalle.columns:
         detalle[["LATITUD", "LONGITUD"]] = detalle["COORDENADAS"].apply(extraer_lat_lon)
     else:
@@ -171,10 +200,11 @@ def construir_puestos():
         detalle["LONGITUD"] = np.nan
 
     puestos = puestos.merge(
-        detalle[["PUESTO_ID", "DIRECCION", "BARRIO", "UPZ", "LATITUD", "LONGITUD"]].drop_duplicates("PUESTO_ID"),
-        on="PUESTO_ID",
+        detalle[["PUESTO_MATCH", "DIRECCION", "BARRIO", "UPZ", "LATITUD", "LONGITUD", "IGLESIA_DETALLE"]].drop_duplicates("PUESTO_MATCH"),
+        on="PUESTO_MATCH",
         how="left",
     )
+    puestos["IGLESIA"] = puestos["IGLESIA_DETALLE"].fillna(puestos["IGLESIA"]).apply(normalizar_iglesia)
     puestos["BARRIO"] = puestos["BARRIO"].fillna("SIN BARRIO")
     puestos["UPZ"] = puestos["UPZ"].fillna("SIN UPZ")
     puestos["VARIACION_ABSOLUTA"] = puestos["VOTOS_2026"] - puestos["VOTOS_2023"]
@@ -183,8 +213,12 @@ def construir_puestos():
         puestos["VARIACION_ABSOLUTA"] / puestos["VOTOS_2023"],
         np.nan,
     )
-    puestos["IGLESIA"] = puestos.apply(
-        lambda row: normalizar_iglesia_territorial(row["IGLESIA"], row["BARRIO"], row["PUESTO"], row["LATITUD"], row["LONGITUD"]),
+    puestos["IGLESIA_ACTUAL_SUGERIDA"] = puestos.apply(
+        lambda row: sugerir_iglesia_actual(row["IGLESIA"], row["BARRIO"], row["PUESTO"], row["LATITUD"], row["LONGITUD"]),
+        axis=1,
+    )
+    puestos["MARCA_REASIGNACION"] = puestos.apply(
+        lambda row: construir_marca_reasignacion(row["IGLESIA"], row["IGLESIA_ACTUAL_SUGERIDA"]),
         axis=1,
     )
     puestos = puestos[
@@ -201,6 +235,8 @@ def construir_puestos():
             "VOTOS_2023",
             "VARIACION_ABSOLUTA",
             "VARIACION_PORCENTUAL",
+            "IGLESIA_ACTUAL_SUGERIDA",
+            "MARCA_REASIGNACION",
         ]
     ]
     return puestos.drop_duplicates("PUESTO_ID")
@@ -230,8 +266,12 @@ def construir_actividades():
     salida["TIPO_ACTIVIDAD"] = valor_columna(actividades, ["ACTIVIDAD", "TIPO_DE_ACTIVIDAD"]).fillna("SIN TIPO")
     salida["LIDER"] = valor_columna(actividades, ["LIDER_Y_CELULAR", "LIDER"])
     salida["OBSERVACIONES"] = valor_columna(actividades, ["DETALLE_DE_LA_ACTIVIDAD", "LOGROS_JUSTIFICACION", "OBSERVACIONES"])
-    salida["IGLESIA"] = salida.apply(
-        lambda row: normalizar_iglesia_territorial(row["IGLESIA"], row["BARRIO"], "", row["LATITUD"], row["LONGITUD"]),
+    salida["IGLESIA_ACTUAL_SUGERIDA"] = salida.apply(
+        lambda row: sugerir_iglesia_actual(row["IGLESIA"], row["BARRIO"], "", row["LATITUD"], row["LONGITUD"]),
+        axis=1,
+    )
+    salida["MARCA_REASIGNACION"] = salida.apply(
+        lambda row: construir_marca_reasignacion(row["IGLESIA"], row["IGLESIA_ACTUAL_SUGERIDA"]),
         axis=1,
     )
     return salida
@@ -262,8 +302,12 @@ def construir_mesas():
     salida["LIDER"] = valor_columna(mesas, ["LIDER", "SOLICITANTE", "RESPONSABLE"])
     salida["ESTADO"] = valor_columna(mesas, ["ESTADO", "ESTADO_DE_SEGUIMIENTO"]).fillna("SIN ESTADO")
     salida["OBSERVACIONES"] = valor_columna(mesas, ["OBSERVACIONES", "CONCLUSIONES", "RESULTADOS_DE_LA_GESTION_PERCEPCION_DEL_CIUDADANO"])
-    salida["IGLESIA"] = salida.apply(
-        lambda row: normalizar_iglesia_territorial(row["IGLESIA"], row["BARRIO"], "", row["LATITUD"], row["LONGITUD"]),
+    salida["IGLESIA_ACTUAL_SUGERIDA"] = salida.apply(
+        lambda row: sugerir_iglesia_actual(row["IGLESIA"], row["BARRIO"], "", row["LATITUD"], row["LONGITUD"]),
+        axis=1,
+    )
+    salida["MARCA_REASIGNACION"] = salida.apply(
+        lambda row: construir_marca_reasignacion(row["IGLESIA"], row["IGLESIA_ACTUAL_SUGERIDA"]),
         axis=1,
     )
     return salida
@@ -338,9 +382,9 @@ def construir_resumenes(puestos, actividades, mesas):
     puestos["MESAS_TRABAJO_BARRIO"] = puestos["BARRIO"].map(mesas.groupby("BARRIO").size()).fillna(0).astype(int)
     puestos = asignar_prioridad(puestos)
 
-    oficiales = puestos[puestos["IGLESIA"].isin(IGLESIAS_OFICIALES)].copy()
-    act_oficial = actividades[actividades["IGLESIA"].isin(IGLESIAS_OFICIALES)].copy()
-    mesas_oficial = mesas[mesas["IGLESIA"].isin(IGLESIAS_OFICIALES)].copy()
+    oficiales = puestos[puestos["IGLESIA"].isin(IGLESIAS_HISTORICAS_ANALISIS)].copy()
+    act_oficial = actividades[actividades["IGLESIA"].isin(IGLESIAS_HISTORICAS_ANALISIS)].copy()
+    mesas_oficial = mesas[mesas["IGLESIA"].isin(IGLESIAS_HISTORICAS_ANALISIS)].copy()
 
     resumen_iglesia = oficiales.groupby("IGLESIA", as_index=False).agg(
         VOTOS_2026=("VOTOS_2026", "sum"),
@@ -348,7 +392,7 @@ def construir_resumenes(puestos, actividades, mesas):
         PUESTOS=("PUESTO_ID", "nunique"),
         BARRIOS=("BARRIO", "nunique"),
     )
-    resumen_iglesia = pd.DataFrame({"IGLESIA": IGLESIAS_OFICIALES}).merge(resumen_iglesia, on="IGLESIA", how="left")
+    resumen_iglesia = pd.DataFrame({"IGLESIA": IGLESIAS_HISTORICAS_ANALISIS}).merge(resumen_iglesia, on="IGLESIA", how="left")
     resumen_iglesia[["VOTOS_2026", "VOTOS_2023", "PUESTOS", "BARRIOS"]] = resumen_iglesia[
         ["VOTOS_2026", "VOTOS_2023", "PUESTOS", "BARRIOS"]
     ].fillna(0)
@@ -412,6 +456,8 @@ def construir_resumenes(puestos, actividades, mesas):
             "VOTOS_2023",
             "VARIACION_ABSOLUTA",
             "VARIACION_PORCENTUAL",
+            "IGLESIA_ACTUAL_SUGERIDA",
+            "MARCA_REASIGNACION",
             "ACTIVIDADES_CAMPANA",
             "MESAS_TRABAJO_BARRIO",
             "PRIORIDAD",
@@ -472,6 +518,8 @@ def construir_resumenes(puestos, actividades, mesas):
             "VOTOS_2023",
             "VARIACION_ABSOLUTA",
             "VARIACION_PORCENTUAL",
+            "IGLESIA_ACTUAL_SUGERIDA",
+            "MARCA_REASIGNACION",
             "ACTIVIDADES_CAMPANA",
             "MESAS_TRABAJO_BARRIO",
             "NIVEL_PRIORIDAD",
@@ -497,6 +545,8 @@ def construir_resumenes(puestos, actividades, mesas):
             "VOTOS_2023",
             "VARIACION_ABSOLUTA",
             "VARIACION_PORCENTUAL",
+            "IGLESIA_ACTUAL_SUGERIDA",
+            "MARCA_REASIGNACION",
             "ACTIVIDADES_CAMPANA",
             "MESAS_TRABAJO_BARRIO",
             "PRIORIDAD",
@@ -532,8 +582,8 @@ def construir_informe(resumen_iglesia, resumen_barrio, matriz_priorizacion):
         ),
         (
             "Lectura por iglesia",
-            "Las cinco iglesias oficiales se analizan como unidades de coordinacion territorial: CLASS ROMA, KENNEDY CENTRAL, PATIO BONITO, CARVAJAL y VALLADOLID. "
-            "Los registros no clasificables quedan fuera del analisis principal y deben revisarse como control de calidad.",
+            "El analisis electoral historico conserva las iglesias responsables registradas en la votacion: CLASS ROMA, KENNEDY CENTRAL, PATIO BONITO y CARVAJAL. "
+            "VALLADOLID se mantiene como referencia territorial actual sugerida para zonas cercanas como Castilla, sin alterar la comparacion del momento electoral.",
         ),
         (
             "Lectura territorial",

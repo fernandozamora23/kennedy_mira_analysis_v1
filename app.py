@@ -21,6 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent
 ARCHIVO_CONSOLIDADO = BASE_DIR / "data" / "kennedy_mira_consolidado.xlsx"
 ARCHIVO_UPZ = BASE_DIR / "data" / "upz_kennedy.geojson"
 IGLESIAS_OFICIALES = ["CLASS ROMA", "KENNEDY CENTRAL", "PATIO BONITO", "CARVAJAL", "VALLADOLID"]
+IGLESIAS_ANALISIS = ["CLASS ROMA", "KENNEDY CENTRAL", "PATIO BONITO", "CARVAJAL"]
 
 COLORES = {
     "fondo": "#F8FAFC",
@@ -160,7 +161,7 @@ def validar_consolidado():
 
 def aplicar_filtros(puestos, actividades, mesas, matriz):
     st.sidebar.header("Filtros de analisis")
-    iglesia_sel = st.sidebar.multiselect("Iglesia oficial", IGLESIAS_OFICIALES, default=IGLESIAS_OFICIALES)
+    iglesia_sel = st.sidebar.multiselect("Iglesia responsable historica", IGLESIAS_ANALISIS, default=IGLESIAS_ANALISIS)
     barrio_sel = st.sidebar.multiselect("Barrio", sorted(puestos["BARRIO"].dropna().astype(str).unique()))
     upz_sel = st.sidebar.multiselect("UPZ", sorted(puestos["UPZ"].dropna().astype(str).unique()))
     prioridad_sel = st.sidebar.multiselect("Prioridad", ["ALTA", "MEDIA", "BAJA"])
@@ -189,7 +190,7 @@ def aplicar_filtros(puestos, actividades, mesas, matriz):
 
 
 def recalcular_resumen_iglesia(puestos, actividades, mesas, resumen_base):
-    base = pd.DataFrame({"IGLESIA": IGLESIAS_OFICIALES})
+    base = pd.DataFrame({"IGLESIA": IGLESIAS_ANALISIS})
     if puestos.empty:
         resumen = base.copy()
         for col in ["VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "PUESTOS", "BARRIOS", "ACTIVIDADES_CAMPANA", "MESAS_TRABAJO"]:
@@ -282,6 +283,8 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
             <b>Actividades de campana:</b> {row['ACTIVIDADES_CAMPANA']}<br>
             <b>Mesas de trabajo:</b> {row['MESAS_TRABAJO_BARRIO']}<br>
             <b>Prioridad:</b> {row['PRIORIDAD']}<br>
+            <b>Iglesia sugerida actual:</b> {row.get('IGLESIA_ACTUAL_SUGERIDA', 'N/D')}<br>
+            <b>Marca:</b> {row.get('MARCA_REASIGNACION', 'N/D')}<br>
             <b>Accion:</b> {row['ACCION_RECOMENDADA']}
         </div>
         """
@@ -400,7 +403,7 @@ c5, c6, c7, c8 = st.columns(4)
 c5.metric("Puestos analizados", formato_numero(puestos["PUESTO_ID"].nunique()))
 c6.metric("Actividades de campana", formato_numero(len(actividades)))
 c7.metric("Mesas de trabajo", formato_numero(len(mesas)))
-c8.metric("Iglesias oficiales", formato_numero(len(IGLESIAS_OFICIALES)))
+c8.metric("Iglesias historicas analizadas", formato_numero(len(IGLESIAS_ANALISIS)))
 
 tabs = st.tabs(
     [
@@ -426,7 +429,8 @@ with tabs[0]:
         st.write("Lectura tecnica")
         st.write(
             "El analisis principal excluye registros sin clasificar para mantener consistencia institucional. "
-            "La priorizacion combina concentracion territorial, variacion electoral, eficiencia territorial de campana y presencia comunitaria."
+            "La priorizacion combina concentracion territorial, variacion electoral, eficiencia territorial de campana y presencia comunitaria. "
+            "Valladolid se conserva como referencia territorial actual, no como responsable historica de la eleccion."
         )
         st.markdown("</div>", unsafe_allow_html=True)
         if not matriz.empty:
@@ -467,7 +471,7 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("Analisis por iglesia")
     st.dataframe(resumen_iglesia.sort_values("VOTOS_2026", ascending=False), use_container_width=True)
-    for iglesia in IGLESIAS_OFICIALES:
+    for iglesia in IGLESIAS_ANALISIS:
         datos_i = puestos[puestos["IGLESIA"].eq(iglesia)]
         resumen_i = resumen_iglesia[resumen_iglesia["IGLESIA"].eq(iglesia)]
         with st.expander(iglesia, expanded=not datos_i.empty):
@@ -493,7 +497,19 @@ with tabs[2]:
             )
             fig.update_layout(height=430, coloraxis_showscale=False)
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(datos_i[["PUESTO", "BARRIO", "UPZ", "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "PRIORIDAD", "ACCION_RECOMENDADA"]], use_container_width=True)
+            columnas = [
+                "PUESTO",
+                "BARRIO",
+                "UPZ",
+                "VOTOS_2026",
+                "VOTOS_2023",
+                "VARIACION_ABSOLUTA",
+                "PRIORIDAD",
+                "IGLESIA_ACTUAL_SUGERIDA",
+                "MARCA_REASIGNACION",
+                "ACCION_RECOMENDADA",
+            ]
+            st.dataframe(datos_i[[c for c in columnas if c in datos_i.columns]], use_container_width=True)
 
 with tabs[3]:
     st.subheader("Analisis por puesto")
