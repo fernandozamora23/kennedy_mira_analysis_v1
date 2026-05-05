@@ -694,6 +694,33 @@ with tab_resumen:
     else:
         st.info("No hay actividades para desglosar con los filtros actuales.")
 
+    st.markdown("### Desglose Electoral (Corporaciones)")
+    jal_23 = puestos_f["JAL_2023"].sum() if "JAL_2023" in puestos_f.columns else 0
+    concejo_23 = puestos_f["MIRA_CONCEJO_2023"].sum() if "MIRA_CONCEJO_2023" in puestos_f.columns else 0
+    camara_26 = puestos_f["CAMARA_2026"].sum() if "CAMARA_2026" in puestos_f.columns else 0
+    senado_26 = puestos_f["SENADO_2026"].sum() if "SENADO_2026" in puestos_f.columns else 0
+    
+    elec_data = pd.DataFrame({
+        "Corporación": ["JAL 2023", "Concejo 2023", "Cámara 2026", "Senado 2026"],
+        "Votos": [jal_23, concejo_23, camara_26, senado_26],
+        "Año": ["2023", "2023", "2026", "2026"]
+    })
+    
+    ce1, ce2 = st.columns([1, 2])
+    with ce1:
+        st.dataframe(elec_data, hide_index=True, use_container_width=True)
+    with ce2:
+        fig_elec = px.bar(
+            elec_data, 
+            x="Corporación", 
+            y="Votos", 
+            color="Año",
+            text_auto=".1f",
+            title="Votos por corporación en el territorio analizado"
+        )
+        fig_elec.update_layout(height=350, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
+        st.plotly_chart(fig_elec, use_container_width=True)
+
 with tab_mapa:
     st.subheader("Mapa interactivo territorial")
     st.markdown('<div class="note-box">Active o desactive capas para comparar puestos de votación, iglesias, mesas de trabajo, actividades y calor electoral 2026.</div>', unsafe_allow_html=True)
