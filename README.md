@@ -1,49 +1,82 @@
-# Dashboard geopolítico Kennedy — MIRA 2026
+# Dashboard territorial-electoral Kennedy MIRA
 
-## Objetivo
-Construir un informe territorial y electoral con:
-- votación Congreso 2026,
-- comparación con Concejo/JAL 2023,
-- reuniones de campaña,
-- mesas de trabajo,
-- puestos de votación con direcciones/coordenadas,
-- lectura por iglesia/templo responsable,
-- mapa interactivo por UPZ/UPL.
-
-## Estructura esperada
-Cree una carpeta `data/` y ponga allí los archivos con estos nombres:
+Este paquete reorganiza el proyecto en un flujo profesional:
 
 ```text
-data/CAMPAÑA CONGRESO 2026 KENNEDY.xlsx
-data/GESTION_EDIL_LORENA.xlsx
-data/VOTACION_2026.xlsx
+Tres Excel originales
+        ↓
+consolidar_datos.py
+        ↓
+data/kennedy_mira_consolidado.xlsx
+        ↓
+app.py
+        ↓
+dashboard territorial-electoral
 ```
 
-Opcional: descargue desde IDECA/Datos Abiertos Bogotá una capa GeoJSON de UPZ o UPL y guárdela como:
+## Archivos principales
 
-```text
-data/kennedy_upz.geojson
-```
+- `app.py`: dashboard en Streamlit.
+- `consolidar_datos.py`: script para regenerar el Excel maestro desde los archivos originales.
+- `data/kennedy_mira_consolidado.xlsx`: base maestra consolidada que lee el dashboard.
+- `requirements.txt`: dependencias.
 
-## Ejecutar
+## Cifras oficiales usadas en el tablero
+
+El tablero separa el total general de Kennedy de los análisis filtrados por iglesia.
+
+- Total Kennedy votos promedio 2026: 7.348
+- Total Kennedy votos promedio 2023: 7.170,5
+- Variación absoluta: +177,5
+- Variación porcentual: +2,48%
+- Puestos analizados: 123
+- Iglesias oficiales: 5
+
+Iglesias oficiales:
+
+1. CLASS ROMA
+2. KENNEDY CENTRAL
+3. PATIO BONITO
+4. CARVAJAL
+5. VALLADOLID
+
+Nota: Valladolid queda como iglesia oficial, aunque no tiene puestos electorales asignados en la matriz base.
+
+## Ejecutar localmente
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Productos del dashboard
-1. Indicadores agregados.
-2. Resumen por iglesia responsable.
-3. Puestos con mayor crecimiento y mayor caída.
-4. Mapa interactivo con puestos, actividades y heatmap.
-5. Matriz de priorización territorial.
-6. Exportables CSV para anexos del informe.
+## Actualizar en GitHub
 
-## Recomendación metodológica
-Para un informe profesional, use el dashboard para producir:
-- hallazgos electorales,
-- hallazgos territoriales,
-- brechas entre campaña, gestión y resultado electoral,
-- priorización de puestos para seguimiento 2026–2027,
-- plan de mesas de trabajo por iglesia y UPZ/UPL.
+Reemplaza los archivos del repositorio por los de este paquete y ejecuta:
+
+```bash
+git add app.py consolidar_datos.py requirements.txt README.md data/kennedy_mira_consolidado.xlsx
+git commit -m "Consolida base maestra y redisenia dashboard territorial electoral"
+git push
+```
+
+## UPZ
+
+El dashboard está preparado para cargar una capa:
+
+```text
+data/upz_kennedy.geojson
+```
+
+Si agregas ese archivo, el mapa la dibuja como capa territorial. Si no existe, el tablero sigue funcionando y usa la columna `UPZ` si está diligenciada en el Excel maestro.
+
+## Seguridad opcional
+
+Si quieres proteger el dashboard con usuario y contraseña en Streamlit Cloud, configura Secrets así:
+
+```toml
+[auth]
+usuario = "fernando"
+password = "KennedyMira2026!"
+```
+
+Si no configuras `[auth]`, el tablero abre sin login.
