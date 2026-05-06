@@ -541,7 +541,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     acts_layer.add_to(m)
 
     # Mesas
-    mesas_layer = folium.FeatureGroup(name="Mesas de trabajo", show=False)
+    mesas_layer = folium.FeatureGroup(name="Mesas de trabajo", show=True)
     for _, r in mesas.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
@@ -665,7 +665,7 @@ with st.sidebar:
     st.markdown("Fuente única: `kennedy_mira_consolidado.xlsx`")
 
     iglesias_oficiales = IGLESIAS_OFICIALES_PERMITIDAS
-    default_iglesias = [i for i in iglesias_oficiales if i in puestos["IGLESIA"].unique()]
+    default_iglesias = iglesias_oficiales
     selected_iglesias = st.multiselect("Iglesias / templos", iglesias_oficiales, default=default_iglesias)
 
     prioridades = sorted(puestos["PRIORIDAD"].dropna().unique().tolist()) if "PRIORIDAD" in puestos.columns else []
