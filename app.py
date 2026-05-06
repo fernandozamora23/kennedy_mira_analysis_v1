@@ -1,5 +1,6 @@
 
 from pathlib import Path
+from decimal import Decimal, ROUND_HALF_UP
 import hmac
 import html
 import json
@@ -90,22 +91,22 @@ st.markdown(
     .metric-card {
         background: #FFFFFF;
         border: 1px solid #E2E8F0;
-        border-radius: 14px;
-        padding: 0.95rem 1.05rem;
-        box-shadow: 0 3px 10px rgba(15, 23, 42, 0.05);
-        min-height: 104px;
+        border-radius: 12px;
+        padding: 0.85rem 1rem;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+        min-height: 96px;
     }
 
     .metric-label {
         color: #475569;
-        font-size: 0.9rem;
+        font-size: 0.82rem;
         font-weight: 700;
         margin-bottom: 0.35rem;
     }
 
     .metric-value {
         color: #0F172A;
-        font-size: 1.85rem;
+        font-size: 1.62rem;
         font-weight: 850;
         line-height: 1.1;
     }
@@ -290,7 +291,8 @@ def cargar_datos(path: Path):
 def fmt_number(value, decimals=0):
     if pd.isna(value):
         return "N.D."
-    return f"{value:,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    number = Decimal(str(value)).quantize(Decimal("1") if decimals == 0 else Decimal(f"1.{'0' * decimals}"), rounding=ROUND_HALF_UP)
+    return f"{number:,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def fmt_pct(value):
@@ -463,9 +465,9 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         <b>Iglesia:</b> {iglesia}<br>
         <b>Barrio:</b> {barrio}<br>
         <b>UPZ:</b> {upz}<br>
-        <b>Votos 2026:</b> {fmt_number(r.get('VOTOS_2026'),1)}<br>
-        <b>Votos 2023:</b> {fmt_number(r.get('VOTOS_2023'),1)}<br>
-        <b>Variación:</b> {fmt_number(r.get('VARIACION_ABSOLUTA'),1)} ({fmt_pct(r.get('VARIACION_PORCENTUAL'))})<br>
+        <b>Votos 2026:</b> {fmt_number(r.get('VOTOS_2026'),0)}<br>
+        <b>Votos 2023:</b> {fmt_number(r.get('VOTOS_2023'),0)}<br>
+        <b>Variación:</b> {fmt_number(r.get('VARIACION_ABSOLUTA'),0)} ({fmt_pct(r.get('VARIACION_PORCENTUAL'))})<br>
         <b>Actividades:</b> {fmt_number(r.get('ACTIVIDADES_CAMPANA'),0)}<br>
         <b>Mesas:</b> {fmt_number(r.get('MESAS_TRABAJO_BARRIO'),0)}<br>
         <b>Prioridad:</b> {safe_html(r.get('PRIORIDAD',''))}<br>
@@ -477,7 +479,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
             location=[r["LATITUD"], r["LONGITUD"]],
             radius=radius,
             popup=folium.Popup(popup, max_width=380),
-            tooltip=f"{r.get('PUESTO','')} | {r.get('IGLESIA','')} | {fmt_number(r.get('VOTOS_2026'),1)}",
+            tooltip=f"{r.get('PUESTO','')} | {r.get('IGLESIA','')} | {fmt_number(r.get('VOTOS_2026'),0)}",
             color=color,
             fill=True,
             fill_color=color,
@@ -654,6 +656,15 @@ for df in [puestos, resumen_iglesia, resumen_puesto, resumen_barrio, matriz]:
         for col in ["VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "LATITUD", "LONGITUD"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
+        for col in [
+            "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "JAL_2023", "MIRA_CONCEJO_2023",
+            "CAMARA_2026", "SENADO_2026", "CENSO_2023", "BENEFICIARIOS", "MESAS_2026_REPORTE",
+            "TESTIGOS_2023_REPORTE", "VOTOS_AFINIDAD_E11_2023", "VOTOS_MIRA_2023_PROP_LISTA",
+            "ACTIVIDADES_CAMPANA", "ACTIVIDADES_CAMPANA_IGLESIA", "MESAS_TRABAJO_BARRIO",
+            "MESAS_TRABAJO", "PUESTOS",
+        ]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").round().astype("Int64")
 
 
 # ============================================================
@@ -717,6 +728,16 @@ if "ESTRATEGIA" in actividades_f.columns:
 else:
     actividades_total = get_indicador(resumen_general, "Actividades de campaña consolidadas")
 
+if "FUENTE" in actividades_f.columns:
+    actividades_oficiales_total = int(actividades_f["FUENTE"].eq("AGENDA GENERAL CON CANDIDATOS").sum())
+else:
+    actividades_oficiales_total = get_indicador(resumen_general, "Actividades oficiales agenda general")
+
+if "TIPO_ACTIVIDAD" in actividades_f.columns:
+    volanteos_total = int(actividades_f["TIPO_ACTIVIDAD"].eq("VOLANTEO").sum())
+else:
+    volanteos_total = get_indicador(resumen_general, "Volanteos confirmados Kennedy")
+
 mesas_total = get_indicador(resumen_general, "Mesas incorporadas reporte Bogotá Tecnología Kennedy")
 if pd.isna(mesas_total):
     mesas_total = get_indicador(resumen_general, "Mesas de trabajo consolidadas")
@@ -730,11 +751,11 @@ testigos_2023_reporte = get_indicador(resumen_general, "Testigos 2023 reporte lo
 
 c1, c2, c3, c4 = st.columns(4)
 with c1:
-    metric_card("Total general Kennedy 2026", fmt_number(total_2026, 1))
+    metric_card("Total general Kennedy 2026", fmt_number(total_2026, 0))
 with c2:
-    metric_card("Total general Kennedy 2023", fmt_number(total_2023, 1))
+    metric_card("Total general Kennedy 2023", fmt_number(total_2023, 0))
 with c3:
-    metric_card("Variación electoral", fmt_number(var_abs, 1), fmt_number(abs(var_abs), 1), positive=var_abs >= 0)
+    metric_card("Variación electoral", fmt_number(var_abs, 0), fmt_number(abs(var_abs), 0), positive=var_abs >= 0)
 with c4:
     metric_card("Variación porcentual", fmt_pct(var_pct), fmt_pct(abs(var_pct)), positive=var_pct >= 0)
 
@@ -742,29 +763,32 @@ c5, c6, c7, c8 = st.columns(4)
 with c5:
     metric_card("Puestos analizados", fmt_number(puestos_total, 0))
 with c6:
-    metric_card("Actividades de campaña", fmt_number(actividades_total, 0))
+    metric_card("Actividades oficiales", fmt_number(actividades_oficiales_total, 0))
 with c7:
-    metric_card("Mesas de trabajo", fmt_number(mesas_total, 0))
+    metric_card("Volanteos confirmados", fmt_number(volanteos_total, 0))
 with c8:
-    metric_card("Iglesias oficiales", fmt_number(iglesias_total, 0))
+    metric_card("Mesas de trabajo", fmt_number(mesas_total, 0))
 
-c9, c10, c11, c12 = st.columns(4)
+c9, c10, c11, c12, c13 = st.columns(5)
 with c9:
-    metric_card("JAL 2023", fmt_number(jal_total, 1))
+    metric_card("Iglesias oficiales", fmt_number(iglesias_total, 0))
 with c10:
-    metric_card("Concejo 2023", fmt_number(concejo_total, 1))
+    metric_card("JAL 2023", fmt_number(jal_total, 0))
 with c11:
-    metric_card("Cámara 2026", fmt_number(camara_total, 1))
+    metric_card("Concejo 2023", fmt_number(concejo_total, 0))
 with c12:
-    metric_card("Senado 2026", fmt_number(senado_total, 1))
+    metric_card("Cámara 2026", fmt_number(camara_total, 0))
+with c13:
+    metric_card("Senado 2026", fmt_number(senado_total, 0))
 
 st.markdown(
     f"""
     <div class="summary-ribbon">
     <b>Lectura ejecutiva:</b> el dashboard separa la comparación <b>JAL / Concejo 2023</b> frente a
     <b>Cámara / Senado 2026</b>, mantiene solo las cinco iglesias oficiales y cruza puestos fijos,
-    presencia comunitaria, mesas de trabajo y prioridad territorial. La capa geográfica usa
-    localidades de Bogotá como contexto y UPZ Kennedy solo cuando exista una capa oficial.
+    <b>{fmt_number(actividades_oficiales_total, 0)} actividades oficiales</b>,
+    <b>{fmt_number(volanteos_total, 0)} volanteos confirmados</b> y mesas de trabajo con prioridad territorial.
+    La capa geográfica usa localidades de Bogotá como contexto y UPZ Kennedy solo cuando exista una capa oficial.
     </div>
     """,
     unsafe_allow_html=True,
@@ -889,7 +913,7 @@ with tab_resumen:
             x="Corporación", 
             y="Votos", 
             color="Bloque de análisis",
-            text_auto=".1f",
+            text_auto=".0f",
             title="Comparación separada por corporación"
         )
         fig_elec.update_layout(height=350, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)

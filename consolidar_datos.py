@@ -25,7 +25,16 @@ ARCHIVO_GESTION = DATA_DIR / "Copia de Gestión Edil Lorena Garzón - 17 de febr
 ARCHIVO_VOTACION = DATA_DIR / "VOTACIÓN 2026.xlsx"
 ARCHIVO_PUESTOS_LOCALIDAD = DATA_DIR / "Puestos Localidad de Kennedy 2026.xlsx"
 ARCHIVO_TECNOLOGIA = DATA_DIR / "kennedy_mira_consolidado_actualizado_tecnologia.xlsx"
+ARCHIVO_VOLANTEO = DATA_DIR / "Agenda Volanteo - v1.xlsx"
 SALIDA = DATA_DIR / "kennedy_mira_consolidado.xlsx"
+
+IGLESIAS_COORDENADAS = {
+    "CLASS ROMA": (4.614359775316158, -74.17619195767098),
+    "PATIO BONITO": (4.646035122997863, -74.17300841534194),
+    "KENNEDY CENTRAL": (4.6217386978458155, -74.16501499477366),
+    "CARVAJAL": (4.616343469904612, -74.1404329155982),
+    "VALLADOLID": (4.647817860855581, -74.14806885512174),
+}
 
 
 def strip_accents(s):
@@ -91,6 +100,10 @@ def parse_coord(v):
         if 3.5 <= lat <= 5.5 and -75 <= lon <= -73:
             return lat, lon
     return np.nan, np.nan
+
+
+def coordenada_referencia_iglesia(iglesia):
+    return IGLESIAS_COORDENADAS.get(iglesia, (np.nan, np.nan))
 
 
 def best_match(key, candidates):
@@ -311,25 +324,69 @@ def cargar_votacion():
 
 def cargar_actividades():
     records = []
-    for sh in ["AGENDA GENERAL CON CANDIDATOS", "AGENDA PARALELA", "Cronograma Kennedy enero"]:
-        df = normalize_cols(pd.read_excel(ARCHIVO_CAMPANA, sheet_name=sh))
-        for _, r in df.iterrows():
-            if pd.isna(r.get("SEDE")) and pd.isna(r.get("ACTIVIDAD")):
-                continue
-            lat, lon = parse_coord(r.get("COORDENADAS", ""))
-            records.append({
-                "ACTIVIDAD_ID": len(records) + 1,
-                "FUENTE": sh,
-                "FECHA": pd.to_datetime(r.get("FECHA CAMPAÑA"), errors="coerce"),
-                "IGLESIA": normalizar_iglesia(r.get("SEDE")),
-                "BARRIO": clean_text(r.get("BARRIO")),
-                "DIRECCION": r.get("DIRECCION", ""),
-                "LATITUD": lat,
-                "LONGITUD": lon,
-                "TIPO_ACTIVIDAD": clean_text(r.get("ACTIVIDAD")),
-                "LIDER": r.get("LIDER Y CELULAR", ""),
-                "OBSERVACIONES": r.get("DETALLE DE LA ACTIVIDAD", ""),
-            })
+    sh = "AGENDA GENERAL CON CANDIDATOS"
+    df = normalize_cols(pd.read_excel(ARCHIVO_CAMPANA, sheet_name=sh))
+    estrategias_validas = {"POLITICO COMUNITARIA", "LIBERTAD RELIGIOSA"}
+    for _, r in df.iterrows():
+        estrategia = clean_text(r.get("ESTRATEGIA"))
+        if estrategia not in estrategias_validas:
+            continue
+        if pd.isna(r.get("SEDE")) and pd.isna(r.get("ACTIVIDAD")):
+            continue
+        iglesia = normalizar_iglesia(r.get("SEDE"))
+        lat, lon = parse_coord(r.get("COORDENADAS", ""))
+        referencia = "Coordenada original"
+        if pd.isna(lat) or pd.isna(lon):
+            lat, lon = coordenada_referencia_iglesia(iglesia)
+            referencia = "Referencia por iglesia"
+        records.append({
+            "ACTIVIDAD_ID": len(records) + 1,
+            "FUENTE": sh,
+            "FECHA": pd.to_datetime(r.get("FECHA CAMPAÑA"), errors="coerce"),
+            "IGLESIA": iglesia,
+            "BARRIO": clean_text(r.get("BARRIO")),
+            "DIRECCION": r.get("DIRECCION", ""),
+            "LATITUD": lat,
+            "LONGITUD": lon,
+            "TIPO_ACTIVIDAD": clean_text(r.get("ACTIVIDAD")),
+            "ESTRATEGIA": estrategia,
+            "LIDER": r.get("LIDER Y CELULAR", ""),
+            "OBSERVACIONES": r.get("DETALLE DE LA ACTIVIDAD", ""),
+            "REFERENCIA_COORDENADA": referencia,
+        })
+
+    if ARCHIVO_VOLANTEO.exists():
+        try:
+            vol = normalize_cols(pd.read_excel(ARCHIVO_VOLANTEO, sheet_name="Volanteo SUR"))
+        except Exception:
+            vol = pd.DataFrame()
+        if not vol.empty:
+            mask = (
+                vol["A"].map(clean_text).str.contains("KENNEDY", na=False)
+                & vol["CONFIRMADA"].map(clean_text).isin(["SI", "SÍ"])
+            )
+            for _, r in vol[mask].iterrows():
+                iglesia = normalizar_iglesia(r.get("A"))
+                lat, lon = parse_coord(r.get("COORDENADAS", ""))
+                referencia = "Coordenada original"
+                if pd.isna(lat) or pd.isna(lon):
+                    lat, lon = coordenada_referencia_iglesia(iglesia)
+                    referencia = "Referencia por iglesia"
+                records.append({
+                    "ACTIVIDAD_ID": len(records) + 1,
+                    "FUENTE": "Agenda Volanteo - v1",
+                    "FECHA": pd.to_datetime(r.get("FECHA (DD/MM/AAAA)"), errors="coerce"),
+                    "IGLESIA": iglesia,
+                    "BARRIO": clean_text(r.get("BARRIO")),
+                    "DIRECCION": r.get("DIRECCION", ""),
+                    "LATITUD": lat,
+                    "LONGITUD": lon,
+                    "TIPO_ACTIVIDAD": "VOLANTEO",
+                    "ESTRATEGIA": "POLITICO COMUNITARIA",
+                    "LIDER": r.get("LIDER QUE ORGANIZA", ""),
+                    "OBSERVACIONES": "Volanteo confirmado Kennedy",
+                    "REFERENCIA_COORDENADA": referencia,
+                })
     return pd.DataFrame(records)
 
 
@@ -477,11 +534,11 @@ def main():
     mesas_originales = cargar_mesas()
 
     iglesias = pd.DataFrame([
-        {"IGLESIA": "CLASS ROMA", "LATITUD": 4.614359775316158, "LONGITUD": -74.17619195767098, "URL": "https://direcciones.idmji.org/es/iglesia/359/"},
-        {"IGLESIA": "PATIO BONITO", "LATITUD": 4.646035122997863, "LONGITUD": -74.17300841534194, "URL": "https://direcciones.idmji.org/es/iglesia/301/"},
-        {"IGLESIA": "KENNEDY CENTRAL", "LATITUD": 4.6217386978458155, "LONGITUD": -74.16501499477366, "URL": ""},
-        {"IGLESIA": "CARVAJAL", "LATITUD": 4.616343469904612, "LONGITUD": -74.1404329155982, "URL": ""},
-        {"IGLESIA": "VALLADOLID", "LATITUD": 4.647817860855581, "LONGITUD": -74.14806885512174, "URL": ""},
+        {"IGLESIA": "CLASS ROMA", "LATITUD": IGLESIAS_COORDENADAS["CLASS ROMA"][0], "LONGITUD": IGLESIAS_COORDENADAS["CLASS ROMA"][1], "URL": "https://direcciones.idmji.org/es/iglesia/359/"},
+        {"IGLESIA": "PATIO BONITO", "LATITUD": IGLESIAS_COORDENADAS["PATIO BONITO"][0], "LONGITUD": IGLESIAS_COORDENADAS["PATIO BONITO"][1], "URL": "https://direcciones.idmji.org/es/iglesia/301/"},
+        {"IGLESIA": "KENNEDY CENTRAL", "LATITUD": IGLESIAS_COORDENADAS["KENNEDY CENTRAL"][0], "LONGITUD": IGLESIAS_COORDENADAS["KENNEDY CENTRAL"][1], "URL": ""},
+        {"IGLESIA": "CARVAJAL", "LATITUD": IGLESIAS_COORDENADAS["CARVAJAL"][0], "LONGITUD": IGLESIAS_COORDENADAS["CARVAJAL"][1], "URL": ""},
+        {"IGLESIA": "VALLADOLID", "LATITUD": IGLESIAS_COORDENADAS["VALLADOLID"][0], "LONGITUD": IGLESIAS_COORDENADAS["VALLADOLID"][1], "URL": ""},
     ])
     iglesias["TIPO"] = "Iglesia / templo"
 
@@ -489,6 +546,8 @@ def main():
     mesas = mesas_tecnologia if not mesas_tecnologia.empty else mesas_originales
 
     act_counts = actividades[actividades["IGLESIA"].isin(iglesias["IGLESIA"])].groupby("IGLESIA").size()
+    act_oficiales_count = int(actividades["FUENTE"].eq("AGENDA GENERAL CON CANDIDATOS").sum()) if "FUENTE" in actividades.columns else len(actividades)
+    volanteos_count = int(actividades["TIPO_ACTIVIDAD"].eq("VOLANTEO").sum()) if "TIPO_ACTIVIDAD" in actividades.columns else 0
     mesa_counts = mesas[mesas["IGLESIA"].isin(iglesias["IGLESIA"])].groupby("IGLESIA").size()
     puestos["ACTIVIDADES_CAMPANA_IGLESIA"] = puestos["IGLESIA"].map(act_counts).fillna(0).astype(int)
     puestos["MESAS_TRABAJO_IGLESIA"] = puestos["IGLESIA"].map(mesa_counts).fillna(0).astype(int)
@@ -567,7 +626,9 @@ def main():
         {"INDICADOR": "Puestos totales analizados", "VALOR": len(puestos), "NOTA": "Excluye fila total KENNEDY."},
         {"INDICADOR": "Puestos con iglesia oficial asignada", "VALOR": int(puestos["IGLESIA"].isin(iglesias["IGLESIA"]).sum()), "NOTA": "Todos los puestos quedaron asignados a iglesias oficiales."},
         {"INDICADOR": "Iglesias oficiales", "VALOR": 5, "NOTA": "Class Roma, Kennedy Central, Patio Bonito, Carvajal y Valladolid."},
-        {"INDICADOR": "Actividades de campaña consolidadas", "VALOR": len(actividades), "NOTA": "Agenda general, paralela y cronograma."},
+        {"INDICADOR": "Actividades de campaña consolidadas", "VALOR": len(actividades), "NOTA": "Agenda general filtrada y volanteos confirmados."},
+        {"INDICADOR": "Actividades oficiales agenda general", "VALOR": act_oficiales_count, "NOTA": "Solo estrategias Político comunitaria y Libertad religiosa."},
+        {"INDICADOR": "Volanteos confirmados Kennedy", "VALOR": volanteos_count, "NOTA": "Agenda Volanteo - v1 con Confirmada = Sí."},
         {"INDICADOR": "Mesas de trabajo consolidadas", "VALOR": len(mesas), "NOTA": "Reporte Kennedy Bogotá Tecnología." if not mesas_tecnologia.empty else "Bases de campaña y gestión."},
         {"INDICADOR": "Puestos cruzados con reporte localidad 2026", "VALOR": puestos_reporte_match, "NOTA": "Cruce contra Puestos Localidad de Kennedy 2026."},
         {"INDICADOR": "Mesas 2026 reporte localidad", "VALOR": mesas_2026_reporte, "NOTA": "Suma de Mesas 2026 del reporte de puestos."},
