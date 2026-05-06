@@ -326,6 +326,7 @@ def cargar_actividades():
                 "LATITUD": lat,
                 "LONGITUD": lon,
                 "TIPO_ACTIVIDAD": clean_text(r.get("ACTIVIDAD")),
+                "LIDER": r.get("LIDER Y CELULAR", ""),
                 "OBSERVACIONES": r.get("DETALLE DE LA ACTIVIDAD", ""),
             })
     return pd.DataFrame(records)
@@ -353,6 +354,7 @@ def cargar_mesas():
                 "LONGITUD": lon,
                 "TEMA": r.get("TEMAS", ""),
                 "ENTIDADES": "",
+                "LIDER": r.get("SOLICITANTE", ""),
                 "ESTADO": r.get("ESTADO", ""),
                 "OBSERVACIONES": r.get("ACCIONES", ""),
             })
@@ -374,6 +376,7 @@ def cargar_mesas():
                 "LONGITUD": np.nan,
                 "TEMA": r.get("TEMA", ""),
                 "ENTIDADES": r.get("ENTIDAD", ""),
+                "LIDER": r.get("RESPONSABLE", "") or r.get("APOYO ASESOR", ""),
                 "ESTADO": r.get("ESTADO DE SEGUIMIENTO", ""),
                 "OBSERVACIONES": r.get("ACCION", ""),
             })

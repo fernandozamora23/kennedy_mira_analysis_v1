@@ -1,6 +1,7 @@
 
 from pathlib import Path
 import hmac
+import html
 import json
 import math
 
@@ -10,7 +11,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import folium
-from folium.plugins import MarkerCluster, HeatMap, Fullscreen, MiniMap
+from folium.plugins import HeatMap, Fullscreen, MiniMap
 from streamlit_folium import st_folium
 
 st.cache_data.clear()
@@ -29,6 +30,7 @@ st.set_page_config(
 DATA_DIR = Path("data")
 CONSOLIDADO = DATA_DIR / "kennedy_mira_consolidado.xlsx"
 UPZ_GEOJSON = DATA_DIR / "upz_kennedy.geojson"
+LOCALIDADES_GEOJSON = DATA_DIR / "localidades_bogota.geojson"
 KENNEDY_CENTER = [4.6260, -74.1570]
 
 COLOR_TEXT = "#0F172A"
@@ -88,10 +90,10 @@ st.markdown(
     .metric-card {
         background: #FFFFFF;
         border: 1px solid #E2E8F0;
-        border-radius: 16px;
-        padding: 1.1rem 1.2rem;
-        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-        min-height: 122px;
+        border-radius: 14px;
+        padding: 0.95rem 1.05rem;
+        box-shadow: 0 3px 10px rgba(15, 23, 42, 0.05);
+        min-height: 104px;
     }
 
     .metric-label {
@@ -103,9 +105,23 @@ st.markdown(
 
     .metric-value {
         color: #0F172A;
-        font-size: 2.15rem;
+        font-size: 1.85rem;
         font-weight: 850;
         line-height: 1.1;
+    }
+
+    .summary-ribbon {
+        background: linear-gradient(90deg, #FFFFFF 0%, #F8FAFC 100%);
+        border: 1px solid #E2E8F0;
+        border-left: 5px solid #2563EB;
+        border-radius: 16px;
+        padding: 1rem 1.15rem;
+        margin: 0.8rem 0 1.1rem 0;
+        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.045);
+    }
+
+    .summary-ribbon b {
+        color: #0F172A;
     }
 
     .metric-delta-positive {
@@ -283,6 +299,45 @@ def fmt_pct(value):
     return f"{value:.1%}".replace(".", ",")
 
 
+def safe_html(value, default="Sin dato"):
+    if value is None or pd.isna(value):
+        return default
+    text = str(value).strip()
+    return html.escape(text) if text else default
+
+
+def cargar_geojson(path: Path):
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def geojson_bounds(geojson_obj):
+    coords = []
+
+    def collect(value):
+        if isinstance(value, list) and len(value) >= 2 and all(isinstance(x, (int, float)) for x in value[:2]):
+            lon, lat = value[:2]
+            if -75 < lon < -73 and 3 < lat < 6:
+                coords.append((lat, lon))
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+
+    for feature in (geojson_obj or {}).get("features", []):
+        collect(feature.get("geometry", {}).get("coordinates", []))
+
+    if not coords:
+        return None
+    lats = [c[0] for c in coords]
+    lons = [c[1] for c in coords]
+    return [[min(lats), min(lons)], [max(lats), max(lons)]]
+
+
 def get_indicador(df, indicador, default=np.nan):
     if df is None or df.empty:
         return default
@@ -339,21 +394,48 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     Fullscreen(position="topleft").add_to(m)
     MiniMap(toggle_display=True, position="bottomleft").add_to(m)
 
-    if UPZ_GEOJSON.exists():
+    localidades_gj = cargar_geojson(LOCALIDADES_GEOJSON)
+    if localidades_gj:
+        def style_localidad(feature):
+            nombre = str((feature.get("properties") or {}).get("LocNombre", "")).strip().upper()
+            is_kennedy = nombre == "KENNEDY"
+            return {
+                "fillColor": "#F8FAFC" if is_kennedy else "#94A3B8",
+                "color": "#0F172A" if is_kennedy else "#CBD5E1",
+                "weight": 2.0 if is_kennedy else 0.7,
+                "fillOpacity": 0.02 if is_kennedy else 0.14,
+            }
+
+        folium.GeoJson(
+            localidades_gj,
+            name="Contexto localidades Bogotá",
+            style_function=style_localidad,
+            tooltip=folium.GeoJsonTooltip(fields=["LocNombre"], aliases=["Localidad:"], sticky=True),
+            show=False,
+        ).add_to(m)
+
+    upz_gj = cargar_geojson(UPZ_GEOJSON)
+    if upz_gj:
         try:
-            with open(UPZ_GEOJSON, "r", encoding="utf-8") as f:
-                gj = json.load(f)
+            upz_fields = [f for f in ["NOMBRE", "CODIGO_UPL", "AREA_HA"] if any(f in (x.get("properties") or {}) for x in upz_gj.get("features", []))]
             folium.GeoJson(
-                gj,
-                name="UPZ Kennedy",
+                upz_gj,
+                name="UPZ / UPL Kennedy",
                 style_function=lambda feature: {
-                    "fillColor": "#EFF6FF",
+                    "fillColor": "#DBEAFE",
                     "color": "#2563EB",
-                    "weight": 1.2,
-                    "fillOpacity": 0.08,
+                    "weight": 1.1,
+                    "fillOpacity": 0.13,
                 },
-                tooltip=folium.GeoJsonTooltip(fields=[], aliases=[]),
+                tooltip=folium.GeoJsonTooltip(
+                    fields=upz_fields,
+                    aliases=["Unidad:", "Código:", "Área ha:"][: len(upz_fields)],
+                    sticky=True,
+                ) if upz_fields else None,
             ).add_to(m)
+            bounds = geojson_bounds(upz_gj)
+            if bounds:
+                m.fit_bounds(bounds)
         except Exception:
             pass
 
@@ -366,22 +448,29 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         heat_layer.add_to(m)
 
     # Puestos
-    puestos_layer = folium.FeatureGroup(name="Puestos de votación", show=True)
-    cluster = MarkerCluster(name="Cluster puestos").add_to(puestos_layer)
+    puestos_layer = folium.FeatureGroup(name="Puestos de votación fijos", show=True)
+    etiquetas_puestos = folium.FeatureGroup(name="Etiquetas puestos prioritarios", show=False)
     for _, r in puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         var = r.get("VARIACION_ABSOLUTA", np.nan)
         color = "green" if pd.notna(var) and var > 0 else "red" if pd.notna(var) and var < 0 else "gray"
+        puesto = safe_html(r.get("PUESTO", ""))
+        iglesia = safe_html(r.get("IGLESIA", ""))
+        barrio = safe_html(r.get("BARRIO", ""))
+        upz = safe_html(r.get("UPZ", ""))
+        accion = safe_html(r.get("ACCION_RECOMENDADA", ""))
         popup = f"""
         <div style="font-family:Arial; width:330px;">
-        <h4 style="margin-bottom:6px;">{r.get('PUESTO','')}</h4>
-        <b>Iglesia:</b> {r.get('IGLESIA','')}<br>
-        <b>Barrio:</b> {r.get('BARRIO','') or 'Sin dato'}<br>
-        <b>UPZ:</b> {r.get('UPZ','') or 'Sin dato'}<br>
+        <h4 style="margin-bottom:6px;">{puesto}</h4>
+        <b>Iglesia:</b> {iglesia}<br>
+        <b>Barrio:</b> {barrio}<br>
+        <b>UPZ:</b> {upz}<br>
         <b>Votos 2026:</b> {fmt_number(r.get('VOTOS_2026'),1)}<br>
         <b>Votos 2023:</b> {fmt_number(r.get('VOTOS_2023'),1)}<br>
         <b>Variación:</b> {fmt_number(r.get('VARIACION_ABSOLUTA'),1)} ({fmt_pct(r.get('VARIACION_PORCENTUAL'))})<br>
-        <b>Prioridad:</b> {r.get('PRIORIDAD','')}<br>
-        <b>Acción:</b> {r.get('ACCION_RECOMENDADA','')}<br>
+        <b>Actividades:</b> {fmt_number(r.get('ACTIVIDADES_CAMPANA'),0)}<br>
+        <b>Mesas:</b> {fmt_number(r.get('MESAS_TRABAJO_BARRIO'),0)}<br>
+        <b>Prioridad:</b> {safe_html(r.get('PRIORIDAD',''))}<br>
+        <b>Acción:</b> {accion}<br>
         </div>
         """
         radius = max(5, min(17, float(r.get("VOTOS_2026", 0) or 0) / 14))
@@ -395,8 +484,22 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
             fill_color=color,
             fill_opacity=0.72,
             weight=1.2,
-        ).add_to(cluster)
+        ).add_to(puestos_layer)
+        if str(r.get("PRIORIDAD", "")).strip().upper() == "ALTA":
+            folium.Marker(
+                location=[r["LATITUD"], r["LONGITUD"]],
+                icon=folium.DivIcon(
+                    html=f"""
+                    <div style="background:white;border:1px solid #DC2626;border-radius:6px;
+                    padding:2px 5px;font-size:10px;font-weight:800;color:#991B1B;
+                    box-shadow:0 1px 4px rgba(15,23,42,.18);white-space:nowrap;">
+                    {puesto[:34]}
+                    </div>
+                    """
+                ),
+            ).add_to(etiquetas_puestos)
     puestos_layer.add_to(m)
+    etiquetas_puestos.add_to(m)
 
     # Churches
     iglesia_layer = folium.FeatureGroup(name="Iglesias / templos", show=True)
@@ -406,11 +509,23 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
             popup=folium.Popup(
-                f"<b>{r.get('IGLESIA','')}</b><br>Lat: {r['LATITUD']}<br>Lon: {r['LONGITUD']}{link}",
+                f"<b>{safe_html(r.get('IGLESIA',''))}</b><br>Lat: {r['LATITUD']}<br>Lon: {r['LONGITUD']}{link}",
                 max_width=280,
             ),
             tooltip=f"Iglesia: {r.get('IGLESIA','')}",
             icon=folium.Icon(color="purple", icon="home", prefix="fa"),
+        ).add_to(iglesia_layer)
+        folium.Marker(
+            location=[r["LATITUD"], r["LONGITUD"]],
+            icon=folium.DivIcon(
+                html=f"""
+                <div style="transform:translate(18px,-8px);background:#FFFFFF;border:1px solid #DDD6FE;
+                border-radius:8px;padding:3px 7px;color:#4C1D95;font-size:11px;font-weight:800;
+                box-shadow:0 1px 5px rgba(15,23,42,.18);white-space:nowrap;">
+                {safe_html(r.get('IGLESIA',''))}
+                </div>
+                """
+            ),
         ).add_to(iglesia_layer)
     iglesia_layer.add_to(m)
 
@@ -425,8 +540,17 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
             fill_opacity=0.6,
             tooltip=f"{r.get('TIPO_ACTIVIDAD','')} | {r.get('IGLESIA','')}",
             popup=folium.Popup(
-                f"<b>Actividad:</b> {r.get('TIPO_ACTIVIDAD','')}<br><b>Iglesia:</b> {r.get('IGLESIA','')}<br><b>Barrio:</b> {r.get('BARRIO','')}",
-                max_width=280,
+                f"""
+                <div style="font-family:Arial; width:280px;">
+                <b>Actividad:</b> {safe_html(r.get('TIPO_ACTIVIDAD',''))}<br>
+                <b>Iglesia:</b> {safe_html(r.get('IGLESIA',''))}<br>
+                <b>Barrio:</b> {safe_html(r.get('BARRIO',''))}<br>
+                <b>Líder:</b> {safe_html(r.get('LIDER',''))}<br>
+                <b>Dirección:</b> {safe_html(r.get('DIRECCION',''))}<br>
+                <b>Observaciones:</b> {safe_html(r.get('OBSERVACIONES',''))}
+                </div>
+                """,
+                max_width=340,
             ),
         ).add_to(acts_layer)
     acts_layer.add_to(m)
@@ -438,8 +562,18 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
             location=[r["LATITUD"], r["LONGITUD"]],
             tooltip=f"Mesa | {r.get('IGLESIA','')} | {r.get('BARRIO','')}",
             popup=folium.Popup(
-                f"<b>Mesa:</b> {r.get('TEMA','')}<br><b>Iglesia:</b> {r.get('IGLESIA','')}<br><b>Barrio:</b> {r.get('BARRIO','')}<br><b>Estado:</b> {r.get('ESTADO','')}",
-                max_width=320,
+                f"""
+                <div style="font-family:Arial; width:300px;">
+                <b>Mesa:</b> {safe_html(r.get('TEMA',''))}<br>
+                <b>Iglesia:</b> {safe_html(r.get('IGLESIA',''))}<br>
+                <b>Barrio:</b> {safe_html(r.get('BARRIO',''))}<br>
+                <b>Líder:</b> {safe_html(r.get('LIDER',''))}<br>
+                <b>Estado:</b> {safe_html(r.get('ESTADO',''))}<br>
+                <b>Dirección:</b> {safe_html(r.get('DIRECCION',''))}<br>
+                <b>Observaciones:</b> {safe_html(r.get('OBSERVACIONES',''))}
+                </div>
+                """,
+                max_width=360,
             ),
             icon=folium.Icon(color="orange", icon="info-sign"),
         ).add_to(mesas_layer)
@@ -452,7 +586,10 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     <span style="color:red;">●</span> Puesto con caída<br>
     <span style="color:gray;">●</span> Sin comparación<br>
     <span style="color:purple;">⬟</span> Iglesia / templo<br>
+    <span style="color:blue;">●</span> Actividad de campaña<br>
     <span style="color:orange;">⬟</span> Mesa de trabajo<br>
+    <span style="color:#94A3B8;">■</span> Otras localidades<br>
+    <span style="color:#2563EB;">■</span> UPZ/UPL Kennedy<br>
     </div>
     """
     m.get_root().html.add_child(folium.Element(legend_html))
@@ -554,7 +691,11 @@ with st.sidebar:
 
     st.divider()
     if UPZ_GEOJSON.exists():
-        st.success("Capa UPZ detectada.")
+        st.success("Capa UPZ/UPL Kennedy detectada.")
+    else:
+        st.warning("Sin capa UPZ/UPL. El mapa seguirá funcionando con puntos.")
+    if LOCALIDADES_GEOJSON.exists():
+        st.success("Capa de localidades Bogotá detectada.")
 
 
 puestos_f, actividades_f, mesas_f = aplicar_filtros(
@@ -629,6 +770,18 @@ with c11:
     metric_card("Cámara 2026", fmt_number(camara_total, 1))
 with c12:
     metric_card("Senado 2026", fmt_number(senado_total, 1))
+
+st.markdown(
+    f"""
+    <div class="summary-ribbon">
+    <b>Lectura ejecutiva:</b> el dashboard separa la comparación <b>JAL / Concejo 2023</b> frente a
+    <b>Cámara / Senado 2026</b>, mantiene solo las cinco iglesias oficiales y cruza puestos fijos,
+    presencia comunitaria, mesas de trabajo y prioridad territorial. La capa geográfica usa
+    localidades de Bogotá como contexto y UPZ/UPL Kennedy cuando está disponible.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ============================================================
@@ -757,7 +910,11 @@ with tab_resumen:
 
 with tab_mapa:
     st.subheader("Mapa interactivo territorial")
-    st.markdown('<div class="note-box">Active o desactive capas para comparar puestos de votación, iglesias, mesas de trabajo, actividades y calor electoral 2026.</div>', unsafe_allow_html=True)
+    capa_msg = "La capa UPZ/UPL Kennedy está activa como referencia tenue." if UPZ_GEOJSON.exists() else "Aún no hay capa UPZ/UPL disponible; el mapa conserva puestos, iglesias y gestión territorial."
+    st.markdown(
+        f'<div class="note-box">Los puestos de votación se muestran como puntos fijos para lectura territorial estable. {capa_msg} Active o desactive capas para comparar iglesias, mesas, actividades, calor electoral y variación.</div>',
+        unsafe_allow_html=True,
+    )
     mapa = crear_mapa(puestos_f, iglesias, actividades_f, mesas_f)
     st_folium(mapa, width=None, height=720)
 
