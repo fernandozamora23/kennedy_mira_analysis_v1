@@ -417,10 +417,10 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     upz_gj = cargar_geojson(UPZ_GEOJSON)
     if upz_gj:
         try:
-            upz_fields = [f for f in ["NOMBRE", "CODIGO_UPL", "AREA_HA"] if any(f in (x.get("properties") or {}) for x in upz_gj.get("features", []))]
+            upz_fields = [f for f in ["UPZ", "NOMBRE", "CODIGO", "AREA_HA"] if any(f in (x.get("properties") or {}) for x in upz_gj.get("features", []))]
             folium.GeoJson(
                 upz_gj,
-                name="UPZ / UPL Kennedy",
+                name="UPZ Kennedy",
                 style_function=lambda feature: {
                     "fillColor": "#DBEAFE",
                     "color": "#2563EB",
@@ -429,7 +429,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
                 },
                 tooltip=folium.GeoJsonTooltip(
                     fields=upz_fields,
-                    aliases=["Unidad:", "Código:", "Área ha:"][: len(upz_fields)],
+                    aliases=["UPZ:", "Nombre:", "Código:", "Área ha:"][: len(upz_fields)],
                     sticky=True,
                 ) if upz_fields else None,
             ).add_to(m)
@@ -449,7 +449,6 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
 
     # Puestos
     puestos_layer = folium.FeatureGroup(name="Puestos de votación fijos", show=True)
-    etiquetas_puestos = folium.FeatureGroup(name="Etiquetas puestos prioritarios", show=False)
     for _, r in puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         var = r.get("VARIACION_ABSOLUTA", np.nan)
         color = "green" if pd.notna(var) and var > 0 else "red" if pd.notna(var) and var < 0 else "gray"
@@ -485,21 +484,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
             fill_opacity=0.72,
             weight=1.2,
         ).add_to(puestos_layer)
-        if str(r.get("PRIORIDAD", "")).strip().upper() == "ALTA":
-            folium.Marker(
-                location=[r["LATITUD"], r["LONGITUD"]],
-                icon=folium.DivIcon(
-                    html=f"""
-                    <div style="background:white;border:1px solid #DC2626;border-radius:6px;
-                    padding:2px 5px;font-size:10px;font-weight:800;color:#991B1B;
-                    box-shadow:0 1px 4px rgba(15,23,42,.18);white-space:nowrap;">
-                    {puesto[:34]}
-                    </div>
-                    """
-                ),
-            ).add_to(etiquetas_puestos)
     puestos_layer.add_to(m)
-    etiquetas_puestos.add_to(m)
 
     # Churches
     iglesia_layer = folium.FeatureGroup(name="Iglesias / templos", show=True)
@@ -568,6 +553,9 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
                 <b>Iglesia:</b> {safe_html(r.get('IGLESIA',''))}<br>
                 <b>Barrio:</b> {safe_html(r.get('BARRIO',''))}<br>
                 <b>Líder:</b> {safe_html(r.get('LIDER',''))}<br>
+                <b>Concejal:</b> {safe_html(r.get('CONCEJAL',''))}<br>
+                <b>Beneficiarios:</b> {fmt_number(r.get('BENEFICIARIOS'),0)}<br>
+                <b>Compromisos:</b> {fmt_number(r.get('COMPROMISOS_TOTAL'),0)}<br>
                 <b>Estado:</b> {safe_html(r.get('ESTADO',''))}<br>
                 <b>Dirección:</b> {safe_html(r.get('DIRECCION',''))}<br>
                 <b>Observaciones:</b> {safe_html(r.get('OBSERVACIONES',''))}
@@ -579,7 +567,8 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         ).add_to(mesas_layer)
     mesas_layer.add_to(m)
 
-    legend_html = """
+    upz_legend = '<span style="color:#2563EB;">■</span> UPZ Kennedy<br>' if upz_gj else ""
+    legend_html = f"""
     <div style="position: fixed; bottom: 35px; right: 35px; z-index:9999; background:white; padding:12px 14px; border:1px solid #CBD5E1; border-radius:10px; box-shadow:0 3px 12px rgba(0,0,0,.12); font-size:13px;">
     <b>Lectura del mapa</b><br>
     <span style="color:green;">●</span> Puesto con crecimiento<br>
@@ -589,7 +578,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     <span style="color:blue;">●</span> Actividad de campaña<br>
     <span style="color:orange;">⬟</span> Mesa de trabajo<br>
     <span style="color:#94A3B8;">■</span> Otras localidades<br>
-    <span style="color:#2563EB;">■</span> UPZ/UPL Kennedy<br>
+    {upz_legend}
     </div>
     """
     m.get_root().html.add_child(folium.Element(legend_html))
@@ -691,9 +680,7 @@ with st.sidebar:
 
     st.divider()
     if UPZ_GEOJSON.exists():
-        st.success("Capa UPZ/UPL Kennedy detectada.")
-    else:
-        st.warning("Sin capa UPZ/UPL. El mapa seguirá funcionando con puntos.")
+        st.success("Capa UPZ Kennedy detectada.")
     if LOCALIDADES_GEOJSON.exists():
         st.success("Capa de localidades Bogotá detectada.")
 
@@ -777,7 +764,7 @@ st.markdown(
     <b>Lectura ejecutiva:</b> el dashboard separa la comparación <b>JAL / Concejo 2023</b> frente a
     <b>Cámara / Senado 2026</b>, mantiene solo las cinco iglesias oficiales y cruza puestos fijos,
     presencia comunitaria, mesas de trabajo y prioridad territorial. La capa geográfica usa
-    localidades de Bogotá como contexto y UPZ/UPL Kennedy cuando está disponible.
+    localidades de Bogotá como contexto y UPZ Kennedy solo cuando exista una capa oficial.
     </div>
     """,
     unsafe_allow_html=True,
@@ -910,9 +897,8 @@ with tab_resumen:
 
 with tab_mapa:
     st.subheader("Mapa interactivo territorial")
-    capa_msg = "La capa UPZ/UPL Kennedy está activa como referencia tenue." if UPZ_GEOJSON.exists() else "Aún no hay capa UPZ/UPL disponible; el mapa conserva puestos, iglesias y gestión territorial."
     st.markdown(
-        f'<div class="note-box">Los puestos de votación se muestran como puntos fijos para lectura territorial estable. {capa_msg} Active o desactive capas para comparar iglesias, mesas, actividades, calor electoral y variación.</div>',
+        '<div class="note-box">Los puestos de votación se muestran como puntos fijos para lectura territorial estable. Active o desactive capas para comparar iglesias, mesas, actividades, calor electoral y variación.</div>',
         unsafe_allow_html=True,
     )
     mapa = crear_mapa(puestos_f, iglesias, actividades_f, mesas_f)

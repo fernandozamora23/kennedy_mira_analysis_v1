@@ -24,6 +24,7 @@ ARCHIVO_CAMPANA = DATA_DIR / "CAMPAÑA CONGRESO 2026 KENNEDY (1).xlsx"
 ARCHIVO_GESTION = DATA_DIR / "Copia de Gestión Edil Lorena Garzón - 17 de febrero, 17_07.xlsx"
 ARCHIVO_VOTACION = DATA_DIR / "VOTACIÓN 2026.xlsx"
 ARCHIVO_PUESTOS_LOCALIDAD = DATA_DIR / "Puestos Localidad de Kennedy 2026.xlsx"
+ARCHIVO_TECNOLOGIA = DATA_DIR / "kennedy_mira_consolidado_actualizado_tecnologia.xlsx"
 SALIDA = DATA_DIR / "kennedy_mira_consolidado.xlsx"
 
 
@@ -389,6 +390,62 @@ def cargar_mesas():
     return mesas
 
 
+def corregir_longitud(lon):
+    lon = pd.to_numeric(lon, errors="coerce")
+    if pd.isna(lon):
+        return np.nan
+    if lon > 0:
+        lon = -lon
+    if -10 < lon < -7:
+        lon = lon * 10
+    return lon
+
+
+def cargar_mesas_tecnologia():
+    if not ARCHIVO_TECNOLOGIA.exists():
+        return pd.DataFrame()
+
+    try:
+        df = normalize_cols(pd.read_excel(ARCHIVO_TECNOLOGIA, sheet_name="reporte_tecnologia_kennedy"))
+    except Exception:
+        return pd.DataFrame()
+
+    records = []
+    for _, r in df.iterrows():
+        if pd.isna(r.get("MESA_ID_REPORTE")) and pd.isna(r.get("NOMBRE_GESTION")):
+            continue
+        records.append({
+            "MESA_ID": len(records) + 1,
+            "FUENTE": "reporte_tecnologia_kennedy",
+            "FECHA": pd.to_datetime(r.get("FECHA"), errors="coerce"),
+            "IGLESIA": normalizar_iglesia(r.get("IGLESIA_REFERENCIA")),
+            "BARRIO": clean_text(r.get("BARRIO")) or "SIN DATO",
+            "DIRECCION": r.get("NOMBRE_GESTION", ""),
+            "LATITUD": pd.to_numeric(r.get("LATITUD"), errors="coerce"),
+            "LONGITUD": corregir_longitud(r.get("LONGITUD")),
+            "TEMA": r.get("TEMA_NORMALIZADO", "") or r.get("NOMBRE_GESTION", ""),
+            "ENTIDADES": "",
+            "LIDER": r.get("NOMBRE_LIDER_SOLICITANTE", ""),
+            "ESTADO": r.get("ESTADO_COMPROMISOS", ""),
+            "OBSERVACIONES": r.get("LECTURA_COMPROMISOS", ""),
+            "ID_MESA_REPORTE": r.get("MESA_ID_REPORTE", ""),
+            "CONCEJAL": r.get("CONCEJAL", ""),
+            "NOMBRE_GESTION": r.get("NOMBRE_GESTION", ""),
+            "BENEFICIARIOS": pd.to_numeric(r.get("BENEFICIARIOS"), errors="coerce"),
+            "COMPROMISOS_TOTAL": pd.to_numeric(r.get("COMPROMISOS_TOTAL"), errors="coerce"),
+            "COMPROMISOS_EN_PROCESO": pd.to_numeric(r.get("COMPROMISOS_EN_PROCESO"), errors="coerce"),
+            "COMPROMISOS_FINALIZADOS": pd.to_numeric(r.get("COMPROMISOS_FINALIZADOS"), errors="coerce"),
+            "COMPROMISOS_PENDIENTES": pd.to_numeric(r.get("COMPROMISOS_PENDIENTES"), errors="coerce"),
+            "DISTANCIA_IGLESIA_KM": pd.to_numeric(r.get("DISTANCIA_IGLESIA_KM"), errors="coerce"),
+            "METODO_IGLESIA": r.get("METODO_IGLESIA", ""),
+        })
+
+    mesas = pd.DataFrame(records)
+    if not mesas.empty:
+        mesas["MESA_ID"] = range(1, len(mesas) + 1)
+    return mesas
+
+
 def classify_priority(row):
     v26 = row["VOTOS_2026"] if pd.notna(row["VOTOS_2026"]) else 0
     var = row["VARIACION_ABSOLUTA"] if pd.notna(row["VARIACION_ABSOLUTA"]) else 0
@@ -417,7 +474,7 @@ def main():
 
     puestos, v5 = cargar_votacion()
     actividades = cargar_actividades()
-    mesas = cargar_mesas()
+    mesas_originales = cargar_mesas()
 
     iglesias = pd.DataFrame([
         {"IGLESIA": "CLASS ROMA", "LATITUD": 4.614359775316158, "LONGITUD": -74.17619195767098, "URL": "https://direcciones.idmji.org/es/iglesia/359/"},
@@ -427,6 +484,9 @@ def main():
         {"IGLESIA": "VALLADOLID", "LATITUD": 4.647817860855581, "LONGITUD": -74.14806885512174, "URL": ""},
     ])
     iglesias["TIPO"] = "Iglesia / templo"
+
+    mesas_tecnologia = cargar_mesas_tecnologia()
+    mesas = mesas_tecnologia if not mesas_tecnologia.empty else mesas_originales
 
     act_counts = actividades[actividades["IGLESIA"].isin(iglesias["IGLESIA"])].groupby("IGLESIA").size()
     mesa_counts = mesas[mesas["IGLESIA"].isin(iglesias["IGLESIA"])].groupby("IGLESIA").size()
@@ -508,7 +568,7 @@ def main():
         {"INDICADOR": "Puestos con iglesia oficial asignada", "VALOR": int(puestos["IGLESIA"].isin(iglesias["IGLESIA"]).sum()), "NOTA": "Todos los puestos quedaron asignados a iglesias oficiales."},
         {"INDICADOR": "Iglesias oficiales", "VALOR": 5, "NOTA": "Class Roma, Kennedy Central, Patio Bonito, Carvajal y Valladolid."},
         {"INDICADOR": "Actividades de campaña consolidadas", "VALOR": len(actividades), "NOTA": "Agenda general, paralela y cronograma."},
-        {"INDICADOR": "Mesas de trabajo consolidadas", "VALOR": len(mesas), "NOTA": "Bases de campaña y gestión."},
+        {"INDICADOR": "Mesas de trabajo consolidadas", "VALOR": len(mesas), "NOTA": "Reporte Kennedy Bogotá Tecnología." if not mesas_tecnologia.empty else "Bases de campaña y gestión."},
         {"INDICADOR": "Puestos cruzados con reporte localidad 2026", "VALOR": puestos_reporte_match, "NOTA": "Cruce contra Puestos Localidad de Kennedy 2026."},
         {"INDICADOR": "Mesas 2026 reporte localidad", "VALOR": mesas_2026_reporte, "NOTA": "Suma de Mesas 2026 del reporte de puestos."},
         {"INDICADOR": "Testigos 2023 reporte localidad", "VALOR": testigos_2023_reporte, "NOTA": "Suma de Testigos 2023 del reporte de puestos."},
@@ -543,6 +603,8 @@ def main():
         matriz.to_excel(writer, sheet_name="matriz_priorizacion", index=False)
         informe.to_excel(writer, sheet_name="informe_ejecutivo", index=False)
         control.to_excel(writer, sheet_name="control_calidad", index=False)
+        if not mesas_tecnologia.empty:
+            mesas_tecnologia.to_excel(writer, sheet_name="reporte_tecnologia_kennedy", index=False)
 
     print(f"Consolidado generado: {SALIDA}")
 
