@@ -3,6 +3,7 @@ from pathlib import Path
 from decimal import Decimal, ROUND_HALF_UP
 import hmac
 import html
+from io import BytesIO
 import json
 import math
 
@@ -42,6 +43,21 @@ COLOR_GREEN = "#16A34A"
 COLOR_BLUE = "#2563EB"
 COLOR_ORANGE = "#F97316"
 COLOR_PURPLE = "#7C3AED"
+TEMPLOS_OFICIALES = ["CLASS ROMA", "KENNEDY CENTRAL", "PATIO BONITO", "CARVAJAL", "VALLADOLID"]
+COLORES_TEMPLOS = {
+    "CLASS ROMA": "#7C3AED",
+    "KENNEDY CENTRAL": "#2563EB",
+    "PATIO BONITO": "#16A34A",
+    "CARVAJAL": "#F97316",
+    "VALLADOLID": "#DC2626",
+}
+DIST_COLS_TEMPLOS = {
+    "CLASS ROMA": "DIST_CLASS_ROMA_KM",
+    "KENNEDY CENTRAL": "DIST_KENNEDY_CENTRAL_KM",
+    "PATIO BONITO": "DIST_PATIO_BONITO_KM",
+    "CARVAJAL": "DIST_CARVAJAL_KM",
+    "VALLADOLID": "DIST_VALLADOLID_KM",
+}
 
 
 # ============================================================
@@ -277,6 +293,8 @@ def cargar_datos(path: Path):
         "matriz": read("matriz_priorizacion"),
         "informe": read("informe_ejecutivo"),
         "control": read("control_calidad"),
+        "asignacion": read("asignacion_puestos"),
+        "resumen_asignacion": read("resumen_asignacion_templos"),
     }
 
     for key in ["puestos", "actividades", "mesas", "iglesias", "resumen_iglesia", "matriz"]:
@@ -338,6 +356,187 @@ def geojson_bounds(geojson_obj):
     lats = [c[0] for c in coords]
     lons = [c[1] for c in coords]
     return [[min(lats), min(lons)], [max(lats), max(lons)]]
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    if pd.isna(lat1) or pd.isna(lon1) or pd.isna(lat2) or pd.isna(lon2):
+        return np.nan
+    radio_tierra_km = 6371.0
+    lat1, lon1, lat2, lon2 = map(math.radians, [float(lat1), float(lon1), float(lat2), float(lon2)])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 2 * radio_tierra_km * math.asin(math.sqrt(a))
+
+
+def calcular_distancias_a_templos(puestos_df, iglesias_df):
+    templos = iglesias_df[iglesias_df["IGLESIA"].isin(TEMPLOS_OFICIALES)].dropna(subset=["LATITUD", "LONGITUD"]).copy()
+    rows = []
+    for _, r in puestos_df.iterrows():
+        row = {
+            "PUESTO_ID": r.get("PUESTO_ID"),
+            "PUESTO": r.get("PUESTO"),
+            "DIRECCION": r.get("DIRECCION"),
+            "BARRIO": r.get("BARRIO"),
+            "UPZ": r.get("UPZ"),
+            "LATITUD": r.get("LATITUD"),
+            "LONGITUD": r.get("LONGITUD"),
+            "IGLESIA_ACTUAL": r.get("IGLESIA"),
+            "VOTOS_2026": r.get("VOTOS_2026"),
+            "VOTOS_2023": r.get("VOTOS_2023"),
+            "VARIACION_ABSOLUTA": r.get("VARIACION_ABSOLUTA"),
+            "VARIACION_PORCENTUAL": r.get("VARIACION_PORCENTUAL"),
+            "PRIORIDAD": r.get("PRIORIDAD"),
+        }
+        lat = pd.to_numeric(r.get("LATITUD"), errors="coerce")
+        lon = pd.to_numeric(r.get("LONGITUD"), errors="coerce")
+        distancias = {}
+        for _, templo in templos.iterrows():
+            distancia = haversine_km(lat, lon, templo["LATITUD"], templo["LONGITUD"])
+            distancias[templo["IGLESIA"]] = distancia
+            row[DIST_COLS_TEMPLOS[templo["IGLESIA"]]] = distancia
+        if pd.isna(lat) or pd.isna(lon):
+            iglesia_actual = row.get("IGLESIA_ACTUAL")
+            row["TEMPLO_MAS_CERCANO"] = "SIN COORDENADAS"
+            row["DISTANCIA_MINIMA_KM"] = np.nan
+            row["TEMPLO_ASIGNADO_PROPUESTO"] = iglesia_actual if iglesia_actual in TEMPLOS_OFICIALES else "PENDIENTE"
+            row["OBSERVACION_ASIGNACION"] = "Sin coordenadas válidas; revisar manualmente."
+        else:
+            templo_cercano = min(distancias, key=lambda t: distancias[t] if pd.notna(distancias[t]) else np.inf)
+            row["TEMPLO_MAS_CERCANO"] = templo_cercano
+            row["DISTANCIA_MINIMA_KM"] = distancias[templo_cercano]
+            row["TEMPLO_ASIGNADO_PROPUESTO"] = templo_cercano
+            row["OBSERVACION_ASIGNACION"] = "Propuesta por cercanía geográfica."
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def aplicar_ajustes_asignacion(asignacion_df):
+    df = asignacion_df.copy()
+    ajustes = st.session_state.get("ajustes_asignacion", {})
+    df["TEMPLO_ASIGNADO_FINAL"] = df["PUESTO"].map(ajustes).fillna(df["TEMPLO_ASIGNADO_PROPUESTO"])
+    df["DISTANCIA_ASIGNADA_KM"] = df.apply(
+        lambda r: r.get(DIST_COLS_TEMPLOS.get(r.get("TEMPLO_ASIGNADO_FINAL"), ""), np.nan),
+        axis=1,
+    )
+    return df
+
+
+def crear_resumen_asignacion(asignacion_df):
+    rows = []
+    for templo in TEMPLOS_OFICIALES:
+        sub = asignacion_df[asignacion_df["TEMPLO_ASIGNADO_FINAL"].eq(templo)].copy()
+        v26 = pd.to_numeric(sub.get("VOTOS_2026", pd.Series(dtype=float)), errors="coerce").sum()
+        v23 = pd.to_numeric(sub.get("VOTOS_2023", pd.Series(dtype=float)), errors="coerce").sum()
+        var_abs = v26 - v23
+        rows.append({
+            "TEMPLO": templo,
+            "PUESTOS_ASIGNADOS": int(len(sub)),
+            "VOTOS_2026_ASIGNADOS": int(round(v26)),
+            "VOTOS_2023_ASIGNADOS": int(round(v23)),
+            "VARIACION_ABSOLUTA": int(round(var_abs)),
+            "VARIACION_PORCENTUAL": var_abs / v23 if v23 else np.nan,
+            "DISTANCIA_PROMEDIO_KM": pd.to_numeric(sub.get("DISTANCIA_ASIGNADA_KM", pd.Series(dtype=float)), errors="coerce").mean(),
+            "DISTANCIA_MAXIMA_KM": pd.to_numeric(sub.get("DISTANCIA_ASIGNADA_KM", pd.Series(dtype=float)), errors="coerce").max(),
+            "PUESTOS_PRIORIDAD_ALTA": int(sub.get("PRIORIDAD", pd.Series(dtype=str)).astype(str).str.upper().eq("ALTA").sum()),
+            "BARRIOS_CUBIERTOS": int(sub.get("BARRIO", pd.Series(dtype=str)).replace("", np.nan).dropna().nunique()),
+            "UPZ_CUBIERTAS": int(sub.get("UPZ", pd.Series(dtype=str)).replace("", np.nan).dropna().nunique()),
+        })
+    return pd.DataFrame(rows)
+
+
+def crear_tabla_puestos_por_templo(asignacion_df):
+    grupos = {
+        templo: asignacion_df[asignacion_df["TEMPLO_ASIGNADO_FINAL"].eq(templo)]["PUESTO"].sort_values().tolist()
+        for templo in TEMPLOS_OFICIALES
+    }
+    max_len = max([len(v) for v in grupos.values()] + [0])
+    return pd.DataFrame({templo: valores + [""] * (max_len - len(valores)) for templo, valores in grupos.items()})
+
+
+def crear_mapa_asignacion(asignacion_df, iglesias_df):
+    m = folium.Map(location=KENNEDY_CENTER, zoom_start=13, tiles="CartoDB positron", control_scale=True)
+    Fullscreen(position="topleft").add_to(m)
+    MiniMap(toggle_display=True, position="bottomleft").add_to(m)
+
+    templos = iglesias_df[iglesias_df["IGLESIA"].isin(TEMPLOS_OFICIALES)].dropna(subset=["LATITUD", "LONGITUD"]).copy()
+    templo_coords = {r["IGLESIA"]: (r["LATITUD"], r["LONGITUD"]) for _, r in templos.iterrows()}
+    templos_layer = folium.FeatureGroup(name="Templos oficiales", show=True)
+    for _, r in templos.iterrows():
+        color = COLORES_TEMPLOS.get(r["IGLESIA"], "#334155")
+        folium.Marker(
+            location=[r["LATITUD"], r["LONGITUD"]],
+            tooltip=f"Templo: {r['IGLESIA']}",
+            popup=folium.Popup(f"<b>{safe_html(r['IGLESIA'])}</b><br>Lat: {r['LATITUD']}<br>Lon: {r['LONGITUD']}", max_width=260),
+            icon=folium.Icon(color="purple", icon="home", prefix="fa"),
+        ).add_to(templos_layer)
+        folium.Marker(
+            location=[r["LATITUD"], r["LONGITUD"]],
+            icon=folium.DivIcon(html=f'<div style="background:white;border:1px solid {color};border-radius:8px;padding:3px 7px;color:{color};font-size:11px;font-weight:800;white-space:nowrap;">{safe_html(r["IGLESIA"])}</div>'),
+        ).add_to(templos_layer)
+    templos_layer.add_to(m)
+
+    puestos_layer = folium.FeatureGroup(name="Puestos por templo asignado", show=True)
+    lineas_layer = folium.FeatureGroup(name="Líneas puesto-templo", show=True)
+    for _, r in asignacion_df.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
+        templo = r.get("TEMPLO_ASIGNADO_FINAL")
+        color = COLORES_TEMPLOS.get(templo, "#64748B")
+        distancia = pd.to_numeric(r.get("DISTANCIA_ASIGNADA_KM"), errors="coerce")
+        popup = f"""
+        <div style="font-family:Arial; width:330px;">
+        <h4 style="margin-bottom:6px;">{safe_html(r.get('PUESTO'))}</h4>
+        <b>Dirección:</b> {safe_html(r.get('DIRECCION'))}<br>
+        <b>Barrio:</b> {safe_html(r.get('BARRIO'))}<br>
+        <b>UPZ:</b> {safe_html(r.get('UPZ'))}<br>
+        <b>Iglesia actual:</b> {safe_html(r.get('IGLESIA_ACTUAL'))}<br>
+        <b>Templo más cercano:</b> {safe_html(r.get('TEMPLO_MAS_CERCANO'))}<br>
+        <b>Templo asignado:</b> {safe_html(templo)}<br>
+        <b>Distancia mínima:</b> {fmt_number(distancia, 2)} km<br>
+        <b>Votos 2026:</b> {fmt_number(r.get('VOTOS_2026'), 0)}<br>
+        <b>Prioridad:</b> {safe_html(r.get('PRIORIDAD'))}
+        </div>
+        """
+        folium.CircleMarker(
+            location=[r["LATITUD"], r["LONGITUD"]],
+            radius=6,
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.78,
+            weight=1.3,
+            tooltip=f"{r.get('PUESTO')} | {safe_html(r.get('BARRIO'))} | {safe_html(templo)} | {fmt_number(distancia, 2)} km | {fmt_number(r.get('VOTOS_2026'), 0)} votos",
+            popup=folium.Popup(popup, max_width=380),
+        ).add_to(puestos_layer)
+        if templo in templo_coords:
+            folium.PolyLine(
+                locations=[[r["LATITUD"], r["LONGITUD"]], list(templo_coords[templo])],
+                color=color,
+                weight=1,
+                opacity=0.28,
+            ).add_to(lineas_layer)
+    lineas_layer.add_to(m)
+    puestos_layer.add_to(m)
+
+    legend_items = "".join(
+        f'<div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{color};margin-right:6px;"></span>{templo}</div>'
+        for templo, color in COLORES_TEMPLOS.items()
+    )
+    m.get_root().html.add_child(folium.Element(f"""
+    <div style="position: fixed; bottom: 35px; right: 35px; z-index:9999; background:white; padding:12px 14px; border:1px solid #CBD5E1; border-radius:10px; box-shadow:0 3px 12px rgba(0,0,0,.12); font-size:13px;">
+    <b>Asignación territorial</b>{legend_items}
+    </div>
+    """))
+    folium.LayerControl(collapsed=False).add_to(m)
+    return m
+
+
+def exportar_asignacion_excel(asignacion_df, resumen_df, tabla_df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        asignacion_df.to_excel(writer, sheet_name="asignacion_detallada", index=False)
+        resumen_df.to_excel(writer, sheet_name="resumen_por_templo", index=False)
+        tabla_df.to_excel(writer, sheet_name="tabla_puestos_por_templo", index=False)
+    return output.getvalue()
 
 
 def get_indicador(df, indicador, default=np.nan):
@@ -614,6 +813,8 @@ resumen_barrio = data["resumen_barrio"]
 matriz = data["matriz"]
 informe = data["informe"]
 control = data.get("control", pd.DataFrame())
+asignacion = data.get("asignacion", pd.DataFrame())
+resumen_asignacion = data.get("resumen_asignacion", pd.DataFrame())
 
 # Filtrar iglesias oficiales permitidas
 IGLESIAS_OFICIALES_PERMITIDAS = ["CLASS ROMA", "KENNEDY CENTRAL", "PATIO BONITO", "CARVAJAL", "VALLADOLID"]
@@ -649,11 +850,16 @@ actividades = filtrar_iglesias(actividades)
 mesas = filtrar_iglesias(mesas)
 iglesias = filtrar_iglesias(iglesias)
 resumen_iglesia = filtrar_iglesias(resumen_iglesia)
+if asignacion.empty:
+    asignacion = calcular_distancias_a_templos(puestos, iglesias)
 
 # Ensure numerics
-for df in [puestos, resumen_iglesia, resumen_puesto, resumen_barrio, matriz]:
+for df in [puestos, resumen_iglesia, resumen_puesto, resumen_barrio, matriz, asignacion, resumen_asignacion]:
     if not df.empty:
-        for col in ["VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "LATITUD", "LONGITUD"]:
+        for col in ["VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "LATITUD", "LONGITUD", "DISTANCIA_MINIMA_KM"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        for col in DIST_COLS_TEMPLOS.values():
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
         for col in [
@@ -799,10 +1005,11 @@ st.markdown(
 # TABS
 # ============================================================
 
-tab_resumen, tab_mapa, tab_iglesia, tab_puesto, tab_barrio, tab_prioridad, tab_export = st.tabs(
+tab_resumen, tab_mapa, tab_asignacion, tab_iglesia, tab_puesto, tab_barrio, tab_prioridad, tab_export = st.tabs(
     [
         "Resumen ejecutivo",
         "Mapa territorial",
+        "Asignación de puestos",
         "Análisis por iglesia",
         "Análisis por puesto",
         "Barrio / UPZ",
@@ -927,6 +1134,122 @@ with tab_mapa:
     )
     mapa = crear_mapa(puestos_f, iglesias, actividades_f, mesas_f)
     st_folium(mapa, width=None, height=720)
+
+with tab_asignacion:
+    st.subheader("Asignación territorial de puestos")
+    st.markdown(
+        """
+        <div class="section-card">
+        Esta sección propone una distribución preliminar de los 123 puestos de votación entre los 5 templos,
+        usando como criterio base la cercanía geográfica. La asignación puede ajustarse manualmente para
+        discusión política, logística y territorial.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    asignacion_base = asignacion.copy()
+    asignacion_final = aplicar_ajustes_asignacion(asignacion_base)
+    resumen_final = crear_resumen_asignacion(asignacion_final)
+    tabla_templos = crear_tabla_puestos_por_templo(asignacion_final)
+
+    puestos_con_coord = asignacion_final.dropna(subset=["LATITUD", "LONGITUD"]).shape[0]
+    puestos_sin_coord = len(asignacion_final) - puestos_con_coord
+    templo_mayor = resumen_final.sort_values("PUESTOS_ASIGNADOS", ascending=False).iloc[0]
+    distancia_prom = pd.to_numeric(asignacion_final["DISTANCIA_ASIGNADA_KM"], errors="coerce").mean()
+    distancia_max = pd.to_numeric(asignacion_final["DISTANCIA_ASIGNADA_KM"], errors="coerce").max()
+
+    a1, a2, a3, a4, a5, a6 = st.columns(6)
+    with a1:
+        metric_card("Total puestos", fmt_number(len(asignacion_final), 0))
+    with a2:
+        metric_card("Con coordenadas", fmt_number(puestos_con_coord, 0))
+    with a3:
+        metric_card("Sin coordenadas", fmt_number(puestos_sin_coord, 0))
+    with a4:
+        metric_card("Mayor carga", safe_html(templo_mayor["TEMPLO"]))
+    with a5:
+        metric_card("Distancia promedio", f"{fmt_number(distancia_prom, 2)} km")
+    with a6:
+        metric_card("Distancia máxima", f"{fmt_number(distancia_max, 2)} km")
+
+    mapa_asignacion = crear_mapa_asignacion(asignacion_final, iglesias)
+    st_folium(mapa_asignacion, width=None, height=720)
+
+    st.markdown("### Ajuste temporal de asignación")
+    if "ajustes_asignacion" not in st.session_state:
+        st.session_state["ajustes_asignacion"] = {}
+
+    lista_puestos = asignacion_final["PUESTO"].dropna().sort_values().tolist()
+    puesto_sel = st.selectbox("Selecciona un puesto de votación", lista_puestos)
+    puesto_row = asignacion_final[asignacion_final["PUESTO"].eq(puesto_sel)].iloc[0]
+    templo_actual = puesto_row.get("TEMPLO_ASIGNADO_FINAL")
+    index_templo = TEMPLOS_OFICIALES.index(templo_actual) if templo_actual in TEMPLOS_OFICIALES else 0
+
+    info_cols = [
+        ("Barrio", puesto_row.get("BARRIO")),
+        ("Dirección", puesto_row.get("DIRECCION")),
+        ("UPZ", puesto_row.get("UPZ")),
+        ("Iglesia actual", puesto_row.get("IGLESIA_ACTUAL")),
+        ("Templo más cercano", puesto_row.get("TEMPLO_MAS_CERCANO")),
+        ("Votos 2026", fmt_number(puesto_row.get("VOTOS_2026"), 0)),
+        ("Prioridad", puesto_row.get("PRIORIDAD")),
+    ]
+    st.dataframe(pd.DataFrame(info_cols, columns=["Campo", "Valor"]), hide_index=True, use_container_width=True)
+
+    dist_info = pd.DataFrame(
+        [{"Templo": templo, "Distancia km": puesto_row.get(col)} for templo, col in DIST_COLS_TEMPLOS.items()]
+    )
+    st.dataframe(dist_info, hide_index=True, use_container_width=True)
+
+    templo_nuevo = st.selectbox("Asignar este puesto al templo", TEMPLOS_OFICIALES, index=index_templo)
+    col_guardar, col_limpiar = st.columns([1, 3])
+    with col_guardar:
+        if st.button("Guardar ajuste temporal"):
+            st.session_state["ajustes_asignacion"][puesto_sel] = templo_nuevo
+            st.success(f"Ajuste temporal guardado: {puesto_sel} → {templo_nuevo}")
+            st.rerun()
+    with col_limpiar:
+        if st.button("Limpiar ajustes temporales"):
+            st.session_state["ajustes_asignacion"] = {}
+            st.rerun()
+
+    st.markdown("### Resumen por templo")
+    st.dataframe(resumen_final, hide_index=True, use_container_width=True)
+
+    st.markdown("### Puestos asignados por templo")
+    st.dataframe(tabla_templos, hide_index=True, use_container_width=True)
+
+    with st.expander("Lectura automática de la asignación", expanded=True):
+        templo_menor = resumen_final.sort_values("PUESTOS_ASIGNADOS", ascending=True).iloc[0]
+        puestos_lejanos = int(pd.to_numeric(asignacion_final["DISTANCIA_ASIGNADA_KM"], errors="coerce").gt(3).sum())
+        alta_por_templo = resumen_final.sort_values("PUESTOS_PRIORIDAD_ALTA", ascending=False).iloc[0]
+        st.write(f"El templo con mayor carga territorial propuesta es {templo_mayor['TEMPLO']}, con {fmt_number(templo_mayor['PUESTOS_ASIGNADOS'], 0)} puestos asignados.")
+        st.write(f"El templo con menor carga territorial propuesta es {templo_menor['TEMPLO']}, con {fmt_number(templo_menor['PUESTOS_ASIGNADOS'], 0)} puestos asignados.")
+        st.write(f"La distancia promedio entre puestos y templos asignados es de {fmt_number(distancia_prom, 2)} km.")
+        st.write(f"Hay {fmt_number(puestos_lejanos, 0)} puestos a más de 3 km del templo asignado, que requieren revisión logística.")
+        st.write(f"Hay {fmt_number(alta_por_templo['PUESTOS_PRIORIDAD_ALTA'], 0)} puestos de prioridad alta asignados a {alta_por_templo['TEMPLO']}.")
+
+    with st.expander("Advertencias metodológicas"):
+        st.write(
+            "La asignación automática se basa únicamente en distancia geográfica entre el puesto de votación y el templo. "
+            "Esta propuesta debe ser revisada con criterios adicionales: liderazgo comunitario, histórico de votación, "
+            "capacidad operativa del templo, rutas de transporte, UPZ, barrios priorizados, presencia de mesas de trabajo "
+            "y conocimiento territorial de los equipos."
+        )
+
+    csv_asignacion = asignacion_final.to_csv(index=False).encode("utf-8-sig")
+    excel_asignacion = exportar_asignacion_excel(asignacion_final, resumen_final, tabla_templos)
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button("Descargar CSV asignación final", csv_asignacion, "asignacion_puestos_final.csv", "text/csv")
+    with d2:
+        st.download_button(
+            "Descargar Excel asignación final",
+            excel_asignacion,
+            "asignacion_puestos_final.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
 with tab_iglesia:
     st.subheader("Análisis por iglesia")

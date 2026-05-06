@@ -503,6 +503,102 @@ def cargar_mesas_tecnologia():
     return mesas
 
 
+def haversine_km(lat1, lon1, lat2, lon2):
+    if pd.isna(lat1) or pd.isna(lon1) or pd.isna(lat2) or pd.isna(lon2):
+        return np.nan
+    radio_tierra_km = 6371.0
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    return float(2 * radio_tierra_km * np.arcsin(np.sqrt(a)))
+
+
+def templo_col_distancia(templo):
+    return "DIST_" + templo.replace(" ", "_") + "_KM"
+
+
+def calcular_distancias_a_templos(puestos_df, iglesias_df):
+    rows = []
+    templos = iglesias_df[["IGLESIA", "LATITUD", "LONGITUD"]].dropna(subset=["LATITUD", "LONGITUD"]).copy()
+
+    for _, puesto in puestos_df.iterrows():
+        record = {
+            "PUESTO_ID": puesto.get("PUESTO_ID"),
+            "PUESTO": puesto.get("PUESTO"),
+            "DIRECCION": puesto.get("DIRECCION"),
+            "BARRIO": puesto.get("BARRIO"),
+            "UPZ": puesto.get("UPZ"),
+            "LATITUD": puesto.get("LATITUD"),
+            "LONGITUD": puesto.get("LONGITUD"),
+            "IGLESIA_ACTUAL": puesto.get("IGLESIA"),
+            "VOTOS_2026": puesto.get("VOTOS_2026"),
+            "VOTOS_2023": puesto.get("VOTOS_2023"),
+            "VARIACION_ABSOLUTA": puesto.get("VARIACION_ABSOLUTA"),
+            "VARIACION_PORCENTUAL": puesto.get("VARIACION_PORCENTUAL"),
+            "PRIORIDAD": puesto.get("PRIORIDAD"),
+        }
+
+        lat = pd.to_numeric(puesto.get("LATITUD"), errors="coerce")
+        lon = pd.to_numeric(puesto.get("LONGITUD"), errors="coerce")
+        distancias = {}
+        for _, templo in templos.iterrows():
+            col = templo_col_distancia(templo["IGLESIA"])
+            distancias[templo["IGLESIA"]] = haversine_km(lat, lon, templo["LATITUD"], templo["LONGITUD"])
+            record[col] = distancias[templo["IGLESIA"]]
+
+        if pd.isna(lat) or pd.isna(lon):
+            iglesia_actual = record.get("IGLESIA_ACTUAL")
+            record["TEMPLO_MAS_CERCANO"] = "SIN COORDENADAS"
+            record["DISTANCIA_MINIMA_KM"] = np.nan
+            record["TEMPLO_ASIGNADO_PROPUESTO"] = iglesia_actual if iglesia_actual and iglesia_actual != "SIN CLASIFICAR" else "PENDIENTE"
+            record["OBSERVACION_ASIGNACION"] = "Sin coordenadas válidas; revisar manualmente."
+        else:
+            templo_cercano = min(distancias, key=lambda k: distancias[k] if pd.notna(distancias[k]) else np.inf)
+            record["TEMPLO_MAS_CERCANO"] = templo_cercano
+            record["DISTANCIA_MINIMA_KM"] = distancias[templo_cercano]
+            record["TEMPLO_ASIGNADO_PROPUESTO"] = templo_cercano
+            record["OBSERVACION_ASIGNACION"] = (
+                "Coincide con iglesia actual."
+                if record.get("IGLESIA_ACTUAL") == templo_cercano
+                else f"Reasignación sugerida por cercanía: {templo_cercano}."
+            )
+        rows.append(record)
+
+    cols = [
+        "PUESTO_ID", "PUESTO", "DIRECCION", "BARRIO", "UPZ", "LATITUD", "LONGITUD",
+        "IGLESIA_ACTUAL", "TEMPLO_MAS_CERCANO", "TEMPLO_ASIGNADO_PROPUESTO",
+        "DISTANCIA_MINIMA_KM", "DIST_CLASS_ROMA_KM", "DIST_KENNEDY_CENTRAL_KM",
+        "DIST_PATIO_BONITO_KM", "DIST_CARVAJAL_KM", "DIST_VALLADOLID_KM",
+        "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL",
+        "PRIORIDAD", "OBSERVACION_ASIGNACION",
+    ]
+    return pd.DataFrame(rows).reindex(columns=cols)
+
+
+def crear_resumen_asignacion(asignacion_df):
+    rows = []
+    for templo in IGLESIAS_COORDENADAS:
+        sub = asignacion_df[asignacion_df["TEMPLO_ASIGNADO_PROPUESTO"].eq(templo)].copy()
+        v26 = pd.to_numeric(sub.get("VOTOS_2026", pd.Series(dtype=float)), errors="coerce").sum()
+        v23 = pd.to_numeric(sub.get("VOTOS_2023", pd.Series(dtype=float)), errors="coerce").sum()
+        var_abs = v26 - v23
+        rows.append({
+            "TEMPLO": templo,
+            "PUESTOS_ASIGNADOS": int(len(sub)),
+            "VOTOS_2026_ASIGNADOS": v26,
+            "VOTOS_2023_ASIGNADOS": v23,
+            "VARIACION_ABSOLUTA": var_abs,
+            "VARIACION_PORCENTUAL": var_abs / v23 if v23 else np.nan,
+            "DISTANCIA_PROMEDIO_KM": pd.to_numeric(sub.get("DISTANCIA_MINIMA_KM", pd.Series(dtype=float)), errors="coerce").mean(),
+            "DISTANCIA_MAXIMA_KM": pd.to_numeric(sub.get("DISTANCIA_MINIMA_KM", pd.Series(dtype=float)), errors="coerce").max(),
+            "PUESTOS_PRIORIDAD_ALTA": int(sub.get("PRIORIDAD", pd.Series(dtype=str)).astype(str).str.upper().eq("ALTA").sum()),
+            "BARRIOS_CUBIERTOS": int(sub.get("BARRIO", pd.Series(dtype=str)).replace("", np.nan).dropna().nunique()),
+            "UPZ_CUBIERTAS": int(sub.get("UPZ", pd.Series(dtype=str)).replace("", np.nan).dropna().nunique()),
+        })
+    return pd.DataFrame(rows)
+
+
 def classify_priority(row):
     v26 = row["VOTOS_2026"] if pd.notna(row["VOTOS_2026"]) else 0
     var = row["VARIACION_ABSOLUTA"] if pd.notna(row["VARIACION_ABSOLUTA"]) else 0
@@ -603,6 +699,9 @@ def main():
     matriz["RESPONSABLE_SUGERIDO"] = matriz["IGLESIA"]
     matriz = matriz[["NIVEL_PRIORIDAD", "PUESTO", "IGLESIA", "BARRIO", "UPZ", "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "VARIABLE_CRITICA", "DIAGNOSTICO", "ACCION_RECOMENDADA", "TEMPORALIDAD", "RESPONSABLE_SUGERIDO"]]
 
+    asignacion_puestos = calcular_distancias_a_templos(puestos, iglesias)
+    resumen_asignacion_templos = crear_resumen_asignacion(asignacion_puestos)
+
     total = v5.iloc[0]
     total_2026, total_2023 = float(total["PROMEDIO 2026"]), float(total["PROMEDIO 2023"])
     total_jal_2023 = pd.to_numeric(puestos["JAL_2023"], errors="coerce").sum()
@@ -664,6 +763,8 @@ def main():
         matriz.to_excel(writer, sheet_name="matriz_priorizacion", index=False)
         informe.to_excel(writer, sheet_name="informe_ejecutivo", index=False)
         control.to_excel(writer, sheet_name="control_calidad", index=False)
+        asignacion_puestos.to_excel(writer, sheet_name="asignacion_puestos", index=False)
+        resumen_asignacion_templos.to_excel(writer, sheet_name="resumen_asignacion_templos", index=False)
         if not mesas_tecnologia.empty:
             mesas_tecnologia.to_excel(writer, sheet_name="reporte_tecnologia_kennedy", index=False)
 
