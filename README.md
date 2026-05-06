@@ -3,7 +3,7 @@
 Este paquete reorganiza el proyecto en un flujo profesional:
 
 ```text
-Tres Excel originales
+Excel originales y reporte Puestos Localidad de Kennedy 2026
         ↓
 consolidar_datos.py
         ↓
@@ -17,8 +17,9 @@ dashboard territorial-electoral
 ## Archivos principales
 
 - `app.py`: dashboard en Streamlit.
-- `consolidar_datos.py`: script para regenerar el Excel maestro desde los archivos originales.
+- `consolidar_datos.py`: script para regenerar el Excel maestro desde los archivos originales y el reporte complementario de puestos.
 - `data/kennedy_mira_consolidado.xlsx`: base maestra consolidada que lee el dashboard.
+- `data/Puestos Localidad de Kennedy 2026.xlsx`: reporte complementario con mesas 2026, testigos 2023, afinidad E-11, dirección 2026 y templo reportado por puesto.
 - `requirements.txt`: dependencias.
 
 ## Cifras oficiales usadas en el tablero
@@ -31,6 +32,7 @@ El tablero separa el total general de Kennedy de los análisis filtrados por igl
 - Variación porcentual: +2,48%
 - Puestos analizados: 123
 - Iglesias oficiales: 5
+- Cruce con `Puestos Localidad de Kennedy 2026`: 123 de 123 puestos.
 
 Iglesias oficiales:
 
@@ -41,6 +43,15 @@ Iglesias oficiales:
 5. VALLADOLID
 
 Nota: Valladolid queda como iglesia oficial, aunque no tiene puestos electorales asignados en la matriz base.
+
+## Separación electoral
+
+El dashboard separa explícitamente dos bloques:
+
+- **JAL / Concejo 2023**: usa las columnas `JAL_2023` y `MIRA_CONCEJO_2023`.
+- **Cámara / Senado 2026**: usa las columnas `CAMARA_2026` y `SENADO_2026`.
+
+El promedio 2023 y el promedio 2026 se conservan como indicadores generales para comparar variación electoral, pero el análisis por corporación se presenta por separado.
 
 ## Ejecutar localmente
 

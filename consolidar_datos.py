@@ -23,6 +23,7 @@ DATA_DIR = Path("data")
 ARCHIVO_CAMPANA = DATA_DIR / "CAMPAÑA CONGRESO 2026 KENNEDY (1).xlsx"
 ARCHIVO_GESTION = DATA_DIR / "Copia de Gestión Edil Lorena Garzón - 17 de febrero, 17_07.xlsx"
 ARCHIVO_VOTACION = DATA_DIR / "VOTACIÓN 2026.xlsx"
+ARCHIVO_PUESTOS_LOCALIDAD = DATA_DIR / "Puestos Localidad de Kennedy 2026.xlsx"
 SALIDA = DATA_DIR / "kennedy_mira_consolidado.xlsx"
 
 
@@ -49,6 +50,12 @@ def key_text(s):
         " INTSMAR ": " INSTMAR ",
     }.items():
         s = s.replace(a, b)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def key_puesto_simple(s):
+    s = key_text(s)
+    s = re.sub(r"\b(COLEGIO|DISTRITAL|COL|DIS|IED|SEDE)\b", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
 
@@ -98,6 +105,104 @@ def normalize_cols(df):
     out = df.copy()
     out.columns = [clean_text(c) for c in out.columns]
     return out
+
+
+def cargar_puestos_localidad():
+    if not ARCHIVO_PUESTOS_LOCALIDAD.exists():
+        return pd.DataFrame()
+    df = normalize_cols(pd.read_excel(ARCHIVO_PUESTOS_LOCALIDAD, sheet_name=0))
+    if "PUESTO 2025" not in df.columns:
+        return pd.DataFrame()
+    df = df[df["PUESTO 2025"].notna()].copy()
+    df["PUESTO_KEY"] = df["PUESTO 2025"].map(key_text)
+    df["PUESTO_KEY_SIMPLE"] = df["PUESTO 2025"].map(key_puesto_simple)
+    return df
+
+
+def enriquecer_con_puestos_localidad(puestos, detalle):
+    if detalle.empty:
+        for col in [
+            "CODIGO_PUESTO_2026",
+            "LLAVE_PUESTO_2026",
+            "DIRECCION_2026_REPORTE",
+            "MESAS_2026_REPORTE",
+            "TESTIGOS_2023_REPORTE",
+            "VOTOS_MIRA_2023_PROP_LISTA",
+            "VOTOS_AFINIDAD_E11_2023",
+            "MENOS_DE_1_KM",
+            "TEMPLO_REPORTE",
+            "IGLESIA_REPORTE_2026",
+            "MATCH_PUESTOS_LOCALIDAD_2026",
+        ]:
+            puestos[col] = np.nan
+        return puestos
+
+    by_key = {r["PUESTO_KEY"]: r for _, r in detalle.iterrows()}
+    by_simple = {r["PUESTO_KEY_SIMPLE"]: r for _, r in detalle.iterrows() if r["PUESTO_KEY_SIMPLE"]}
+    keys = list(by_key.keys())
+    simple_keys = list(by_simple.keys())
+
+    enriched = []
+    for _, row in puestos.iterrows():
+        key = key_text(row["PUESTO"])
+        simple = key_puesto_simple(row["PUESTO"])
+        match, score, metodo = None, 0, "SIN MATCH"
+        if key in by_key:
+            match, score, metodo = by_key[key], 1, "EXACTO"
+        elif simple in by_simple:
+            match, score, metodo = by_simple[simple], 1, "EXACTO_SIMPLE"
+        else:
+            contained = [k for k in keys if len(k) >= 18 and (k in key or key in k)]
+            if contained:
+                b = max(contained, key=len)
+                match, score, metodo = by_key[b], 0.99, "CONTENIDO"
+            else:
+                b, s = best_match(key, keys)
+                if s >= 0.82:
+                    match, score, metodo = by_key[b], s, "FUZZY"
+                else:
+                    contained_simple = [k for k in simple_keys if len(k) >= 12 and (k in simple or simple in k)]
+                    if contained_simple:
+                        b = max(contained_simple, key=len)
+                        match, score, metodo = by_simple[b], 0.99, "CONTENIDO_SIMPLE"
+                    else:
+                        b, s = best_match(simple, simple_keys)
+                        if s >= 0.86:
+                            match, score, metodo = by_simple[b], s, "FUZZY_SIMPLE"
+
+        record = row.to_dict()
+        if match is not None:
+            record.update({
+                "CODIGO_PUESTO_2026": match.get("CODIGO DE PUESTO", ""),
+                "LLAVE_PUESTO_2026": match.get("LLAVE", ""),
+                "DIRECCION_2026_REPORTE": match.get("DIRECCIONES 2026", ""),
+                "MESAS_2026_REPORTE": pd.to_numeric(match.get("MESAS 2026"), errors="coerce"),
+                "TESTIGOS_2023_REPORTE": pd.to_numeric(match.get("TESTIGOS 2023"), errors="coerce"),
+                "VOTOS_MIRA_2023_PROP_LISTA": pd.to_numeric(match.get("VOTOS MIRA 2023 + PROPORCION A LISTA"), errors="coerce"),
+                "VOTOS_AFINIDAD_E11_2023": pd.to_numeric(match.get("SUMA DE VOTOS_AFINIDAD E-11 2023"), errors="coerce"),
+                "MENOS_DE_1_KM": "SI" if clean_text(match.get("MENOS DE 1 KILOMETRO")) == "X" else "NO",
+                "TEMPLO_REPORTE": clean_text(match.get("TEMPLO")),
+                "IGLESIA_REPORTE_2026": normalizar_iglesia(match.get("TEMPLO")),
+                "MATCH_PUESTOS_LOCALIDAD_2026": f"{metodo}:{score:.3f}",
+            })
+            if not record.get("DIRECCION") and match.get("DIRECCIONES 2026"):
+                record["DIRECCION"] = match.get("DIRECCIONES 2026")
+        else:
+            record.update({
+                "CODIGO_PUESTO_2026": "",
+                "LLAVE_PUESTO_2026": "",
+                "DIRECCION_2026_REPORTE": "",
+                "MESAS_2026_REPORTE": np.nan,
+                "TESTIGOS_2023_REPORTE": np.nan,
+                "VOTOS_MIRA_2023_PROP_LISTA": np.nan,
+                "VOTOS_AFINIDAD_E11_2023": np.nan,
+                "MENOS_DE_1_KM": "",
+                "TEMPLO_REPORTE": "",
+                "IGLESIA_REPORTE_2026": "SIN CLASIFICAR",
+                "MATCH_PUESTOS_LOCALIDAD_2026": "SIN MATCH",
+            })
+        enriched.append(record)
+    return pd.DataFrame(enriched)
 
 
 def cargar_votacion():
@@ -198,7 +303,9 @@ def cargar_votacion():
             "MATCH_IGLESIA": round(h7score, 3),
         })
 
-    return pd.DataFrame(rows), v5
+    puestos = pd.DataFrame(rows)
+    puestos = enriquecer_con_puestos_localidad(puestos, cargar_puestos_localidad())
+    return puestos, v5
 
 
 def cargar_actividades():
@@ -376,27 +483,49 @@ def main():
 
     total = v5.iloc[0]
     total_2026, total_2023 = float(total["PROMEDIO 2026"]), float(total["PROMEDIO 2023"])
+    total_jal_2023 = pd.to_numeric(puestos["JAL_2023"], errors="coerce").sum()
+    total_concejo_2023 = pd.to_numeric(puestos["MIRA_CONCEJO_2023"], errors="coerce").sum()
+    total_camara_2026 = pd.to_numeric(puestos["CAMARA_2026"], errors="coerce").sum()
+    total_senado_2026 = pd.to_numeric(puestos["SENADO_2026"], errors="coerce").sum()
+    mesas_2026_reporte = pd.to_numeric(puestos.get("MESAS_2026_REPORTE", pd.Series(dtype=float)), errors="coerce").sum()
+    testigos_2023_reporte = pd.to_numeric(puestos.get("TESTIGOS_2023_REPORTE", pd.Series(dtype=float)), errors="coerce").sum()
+    afinidad_2023_reporte = pd.to_numeric(puestos.get("VOTOS_AFINIDAD_E11_2023", pd.Series(dtype=float)), errors="coerce").sum()
+    mira_prop_2023_reporte = pd.to_numeric(puestos.get("VOTOS_MIRA_2023_PROP_LISTA", pd.Series(dtype=float)), errors="coerce").sum()
+    puestos_reporte_match = puestos.get("MATCH_PUESTOS_LOCALIDAD_2026", pd.Series("", index=puestos.index)).ne("SIN MATCH").sum()
     resumen_general = pd.DataFrame([
         {"INDICADOR": "Total Kennedy votos promedio 2026", "VALOR": total_2026, "NOTA": "Fila total oficial de Hoja 5."},
         {"INDICADOR": "Total Kennedy votos promedio 2023", "VALOR": total_2023, "NOTA": "Fila total oficial de Hoja 5."},
         {"INDICADOR": "Variación absoluta Kennedy", "VALOR": total_2026 - total_2023, "NOTA": "2026 - 2023."},
         {"INDICADOR": "Variación porcentual Kennedy", "VALOR": (total_2026 - total_2023) / total_2023, "NOTA": "Variación / 2023."},
+        {"INDICADOR": "JAL 2023 Kennedy", "VALOR": total_jal_2023, "NOTA": "Suma por puestos de JAL 2023."},
+        {"INDICADOR": "Concejo 2023 Kennedy", "VALOR": total_concejo_2023, "NOTA": "Suma por puestos de MIRA Concejo 2023."},
+        {"INDICADOR": "Cámara 2026 Kennedy", "VALOR": total_camara_2026, "NOTA": "Suma por puestos de Cámara 2026."},
+        {"INDICADOR": "Senado 2026 Kennedy", "VALOR": total_senado_2026, "NOTA": "Suma por puestos de Senado 2026."},
         {"INDICADOR": "Puestos totales analizados", "VALOR": len(puestos), "NOTA": "Excluye fila total KENNEDY."},
         {"INDICADOR": "Puestos con iglesia oficial asignada", "VALOR": int(puestos["IGLESIA"].isin(iglesias["IGLESIA"]).sum()), "NOTA": "Todos los puestos quedaron asignados a iglesias oficiales."},
         {"INDICADOR": "Iglesias oficiales", "VALOR": 5, "NOTA": "Class Roma, Kennedy Central, Patio Bonito, Carvajal y Valladolid."},
         {"INDICADOR": "Actividades de campaña consolidadas", "VALOR": len(actividades), "NOTA": "Agenda general, paralela y cronograma."},
         {"INDICADOR": "Mesas de trabajo consolidadas", "VALOR": len(mesas), "NOTA": "Bases de campaña y gestión."},
+        {"INDICADOR": "Puestos cruzados con reporte localidad 2026", "VALOR": puestos_reporte_match, "NOTA": "Cruce contra Puestos Localidad de Kennedy 2026."},
+        {"INDICADOR": "Mesas 2026 reporte localidad", "VALOR": mesas_2026_reporte, "NOTA": "Suma de Mesas 2026 del reporte de puestos."},
+        {"INDICADOR": "Testigos 2023 reporte localidad", "VALOR": testigos_2023_reporte, "NOTA": "Suma de Testigos 2023 del reporte de puestos."},
+        {"INDICADOR": "Votos MIRA 2023 proporción lista reporte", "VALOR": mira_prop_2023_reporte, "NOTA": "Suma del campo Votos MIRA 2023 + Proporción a lista."},
+        {"INDICADOR": "Votos afinidad E-11 2023 reporte", "VALOR": afinidad_2023_reporte, "NOTA": "Suma del campo votos_afinidad E-11 2023."},
     ])
 
     informe = pd.DataFrame([
         {"SECCION": "Resumen general", "TEXTO": f"Kennedy registró {total_2026:,.1f} votos promedio en 2026 frente a {total_2023:,.1f} en 2023, para una variación de {total_2026-total_2023:,.1f} votos ({(total_2026-total_2023)/total_2023:.2%})."},
         {"SECCION": "Hallazgos principales", "TEXTO": "El tablero permite separar resultado general Kennedy y rendimiento por iglesia, evitando confundir totales filtrados con totales oficiales."},
+        {"SECCION": "Lectura JAL y Concejo 2023", "TEXTO": f"La base 2023 separa JAL ({total_jal_2023:,.1f}) y Concejo ({total_concejo_2023:,.1f}), lo que permite distinguir comportamiento local y voto de corporación distrital."},
+        {"SECCION": "Lectura Cámara y Senado 2026", "TEXTO": f"La base 2026 separa Cámara ({total_camara_2026:,.1f}) y Senado ({total_senado_2026:,.1f}), permitiendo evaluar rendimiento legislativo por puesto e iglesia."},
+        {"SECCION": "Reporte de puestos localidad 2026", "TEXTO": f"Se cruzaron {puestos_reporte_match:,.0f} puestos con el archivo Puestos Localidad de Kennedy 2026, incorporando mesas 2026, testigos 2023, afinidad E-11 y templo reportado como variables operativas complementarias."},
         {"SECCION": "Recomendaciones estratégicas", "TEXTO": "Priorizar puestos de alta votación con caída, consolidar iglesias con saldo positivo y completar capa UPZ para análisis espacial."},
     ])
 
     control = pd.DataFrame([
         {"TIPO": "IGLESIA", "REGISTRO": "VALLADOLID", "OBSERVACION": "Iglesia oficial sin puestos asignados.", "ACCION_SUGERIDA": "Definir rol territorial."},
         {"TIPO": "UPZ", "REGISTRO": "data/upz_kennedy.geojson", "OBSERVACION": "No incluida en este paquete.", "ACCION_SUGERIDA": "Agregar GeoJSON oficial para análisis por UPZ."},
+        {"TIPO": "CRUCE", "REGISTRO": "Puestos Localidad de Kennedy 2026", "OBSERVACION": f"{puestos_reporte_match} de {len(puestos)} puestos cruzados con el reporte complementario.", "ACCION_SUGERIDA": "Revisar puestos sin match antes de decisiones operativas."},
     ])
 
     with pd.ExcelWriter(SALIDA, engine="openpyxl") as writer:

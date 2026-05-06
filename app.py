@@ -590,7 +590,15 @@ else:
     actividades_total = get_indicador(resumen_general, "Actividades de campaña consolidadas")
 
 mesas_total = get_indicador(resumen_general, "Mesas incorporadas reporte Bogotá Tecnología Kennedy")
+if pd.isna(mesas_total):
+    mesas_total = get_indicador(resumen_general, "Mesas de trabajo consolidadas")
 iglesias_total = get_indicador(resumen_general, "Iglesias oficiales")
+jal_total = get_indicador(resumen_general, "JAL 2023 Kennedy")
+concejo_total = get_indicador(resumen_general, "Concejo 2023 Kennedy")
+camara_total = get_indicador(resumen_general, "Cámara 2026 Kennedy")
+senado_total = get_indicador(resumen_general, "Senado 2026 Kennedy")
+mesas_2026_reporte = get_indicador(resumen_general, "Mesas 2026 reporte localidad")
+testigos_2023_reporte = get_indicador(resumen_general, "Testigos 2023 reporte localidad")
 
 c1, c2, c3, c4 = st.columns(4)
 with c1:
@@ -611,6 +619,16 @@ with c7:
     metric_card("Mesas de trabajo", fmt_number(mesas_total, 0))
 with c8:
     metric_card("Iglesias oficiales", fmt_number(iglesias_total, 0))
+
+c9, c10, c11, c12 = st.columns(4)
+with c9:
+    metric_card("JAL 2023", fmt_number(jal_total, 1))
+with c10:
+    metric_card("Concejo 2023", fmt_number(concejo_total, 1))
+with c11:
+    metric_card("Cámara 2026", fmt_number(camara_total, 1))
+with c12:
+    metric_card("Senado 2026", fmt_number(senado_total, 1))
 
 
 # ============================================================
@@ -694,29 +712,45 @@ with tab_resumen:
     else:
         st.info("No hay actividades para desglosar con los filtros actuales.")
 
-    st.markdown("### Desglose Electoral (Corporaciones)")
+    st.markdown("### Desglose electoral por corporación")
     jal_23 = puestos_f["JAL_2023"].sum() if "JAL_2023" in puestos_f.columns else 0
     concejo_23 = puestos_f["MIRA_CONCEJO_2023"].sum() if "MIRA_CONCEJO_2023" in puestos_f.columns else 0
     camara_26 = puestos_f["CAMARA_2026"].sum() if "CAMARA_2026" in puestos_f.columns else 0
     senado_26 = puestos_f["SENADO_2026"].sum() if "SENADO_2026" in puestos_f.columns else 0
     
-    elec_data = pd.DataFrame({
-        "Corporación": ["JAL 2023", "Concejo 2023", "Cámara 2026", "Senado 2026"],
-        "Votos": [jal_23, concejo_23, camara_26, senado_26],
-        "Año": ["2023", "2023", "2026", "2026"]
-    })
+    elec_data = pd.DataFrame(
+        {
+            "Corporación": ["JAL", "Concejo", "Cámara", "Senado"],
+            "Votos": [jal_23, concejo_23, camara_26, senado_26],
+            "Bloque de análisis": ["JAL / Concejo 2023", "JAL / Concejo 2023", "Cámara / Senado 2026", "Cámara / Senado 2026"],
+        }
+    )
     
     ce1, ce2 = st.columns([1, 2])
     with ce1:
-        st.dataframe(elec_data, hide_index=True, use_container_width=True)
+        st.markdown("**JAL / Concejo 2023**")
+        st.dataframe(elec_data[elec_data["Bloque de análisis"].eq("JAL / Concejo 2023")], hide_index=True, use_container_width=True)
+        st.markdown("**Cámara / Senado 2026**")
+        st.dataframe(elec_data[elec_data["Bloque de análisis"].eq("Cámara / Senado 2026")], hide_index=True, use_container_width=True)
+        st.markdown("**Variables operativas del nuevo reporte**")
+        st.dataframe(
+            pd.DataFrame(
+                {
+                    "Indicador": ["Mesas 2026", "Testigos 2023"],
+                    "Valor": [mesas_2026_reporte, testigos_2023_reporte],
+                }
+            ),
+            hide_index=True,
+            use_container_width=True,
+        )
     with ce2:
         fig_elec = px.bar(
             elec_data, 
             x="Corporación", 
             y="Votos", 
-            color="Año",
+            color="Bloque de análisis",
             text_auto=".1f",
-            title="Votos por corporación en el territorio analizado"
+            title="Comparación separada por corporación"
         )
         fig_elec.update_layout(height=350, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
         st.plotly_chart(fig_elec, use_container_width=True)
@@ -810,11 +844,15 @@ with tab_puesto:
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### Matriz analítica por puesto")
+    cols_puesto = [
+        "PUESTO", "IGLESIA", "MIRA_CONCEJO_2023", "JAL_2023", "CAMARA_2026", "SENADO_2026",
+        "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL",
+        "MESAS_2026_REPORTE", "TESTIGOS_2023_REPORTE", "VOTOS_AFINIDAD_E11_2023",
+        "TEMPLO_REPORTE", "TIENE_MESA_TRABAJO", "PRIORIDAD", "ACCION_RECOMENDADA"
+    ]
+    cols_puesto = [c for c in cols_puesto if c in puestos_f.columns]
     st.dataframe(
-        puestos_f[[
-            "PUESTO", "IGLESIA", "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA",
-            "VARIACION_PORCENTUAL", "TIENE_MESA_TRABAJO", "PRIORIDAD", "ACCION_RECOMENDADA"
-        ]].sort_values(["PRIORIDAD", "VOTOS_2026"], ascending=[True, False]),
+        puestos_f[cols_puesto].sort_values(["PRIORIDAD", "VOTOS_2026"], ascending=[True, False]),
         use_container_width=True,
         hide_index=True,
     )
