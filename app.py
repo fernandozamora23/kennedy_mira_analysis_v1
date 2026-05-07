@@ -401,10 +401,19 @@ def calcular_distancias_a_templos(puestos_df, iglesias_df):
             row["OBSERVACION_ASIGNACION"] = "Sin coordenadas válidas; revisar manualmente."
         else:
             templo_cercano = min(distancias, key=lambda t: distancias[t] if pd.notna(distancias[t]) else np.inf)
+            iglesia_actual = row.get("IGLESIA_ACTUAL")
+            iglesia_actual_valida = iglesia_actual if iglesia_actual in TEMPLOS_OFICIALES else "PENDIENTE"
             row["TEMPLO_MAS_CERCANO"] = templo_cercano
             row["DISTANCIA_MINIMA_KM"] = distancias[templo_cercano]
-            row["TEMPLO_ASIGNADO_PROPUESTO"] = templo_cercano
-            row["OBSERVACION_ASIGNACION"] = "Propuesta por cercanía geográfica."
+            if templo_cercano == "VALLADOLID" and iglesia_actual != "VALLADOLID":
+                row["TEMPLO_ASIGNADO_PROPUESTO"] = "VALLADOLID"
+                row["OBSERVACION_ASIGNACION"] = (
+                    "Propuesta específica para Valladolid por cercanía territorial; "
+                    f"se conserva asignación documental para los demás templos."
+                )
+            else:
+                row["TEMPLO_ASIGNADO_PROPUESTO"] = iglesia_actual_valida
+                row["OBSERVACION_ASIGNACION"] = "Se conserva el templo asignado en el documento base."
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -1379,9 +1388,9 @@ with tab_asignacion:
     st.markdown(
         """
         <div class="section-card">
-        Esta sección propone una distribución preliminar de los 123 puestos de votación entre los 5 templos,
-        usando como criterio base la cercanía geográfica. La asignación puede ajustarse manualmente para
-        discusión política, logística y territorial.
+        Esta sección conserva la asignación de puestos registrada en el documento base. La única propuesta
+        automática de cambio es para identificar puestos que, por cercanía territorial, podrían pasar a
+        <b>Valladolid</b>. Los demás templos no se mueven por cercanía.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1471,10 +1480,10 @@ with tab_asignacion:
 
     with st.expander("Advertencias metodológicas"):
         st.write(
-            "La asignación automática se basa únicamente en distancia geográfica entre el puesto de votación y el templo. "
-            "Esta propuesta debe ser revisada con criterios adicionales: liderazgo comunitario, histórico de votación, "
-            "capacidad operativa del templo, rutas de transporte, UPZ, barrios priorizados, presencia de mesas de trabajo "
-            "y conocimiento territorial de los equipos."
+            "La asignación base de puestos se conserva según el documento original. La distancia geográfica se usa solo "
+            "para marcar posibles puestos que Valladolid podría asumir por cercanía territorial. Esta propuesta debe "
+            "validarse con criterios políticos, liderazgo comunitario, capacidad operativa, rutas de transporte, barrios "
+            "priorizados y conocimiento de los equipos."
         )
 
     csv_asignacion = asignacion_final.to_csv(index=False).encode("utf-8-sig")

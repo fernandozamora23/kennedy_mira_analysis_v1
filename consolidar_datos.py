@@ -555,14 +555,19 @@ def calcular_distancias_a_templos(puestos_df, iglesias_df):
             record["OBSERVACION_ASIGNACION"] = "Sin coordenadas válidas; revisar manualmente."
         else:
             templo_cercano = min(distancias, key=lambda k: distancias[k] if pd.notna(distancias[k]) else np.inf)
+            iglesia_actual = record.get("IGLESIA_ACTUAL")
+            iglesia_actual_valida = iglesia_actual if iglesia_actual in IGLESIAS_COORDENADAS else "PENDIENTE"
             record["TEMPLO_MAS_CERCANO"] = templo_cercano
             record["DISTANCIA_MINIMA_KM"] = distancias[templo_cercano]
-            record["TEMPLO_ASIGNADO_PROPUESTO"] = templo_cercano
-            record["OBSERVACION_ASIGNACION"] = (
-                "Coincide con iglesia actual."
-                if record.get("IGLESIA_ACTUAL") == templo_cercano
-                else f"Reasignación sugerida por cercanía: {templo_cercano}."
-            )
+            if templo_cercano == "VALLADOLID" and iglesia_actual != "VALLADOLID":
+                record["TEMPLO_ASIGNADO_PROPUESTO"] = "VALLADOLID"
+                record["OBSERVACION_ASIGNACION"] = (
+                    "Propuesta específica para Valladolid por cercanía territorial; "
+                    f"la asignación documental se mantiene como {iglesia_actual_valida}."
+                )
+            else:
+                record["TEMPLO_ASIGNADO_PROPUESTO"] = iglesia_actual_valida
+                record["OBSERVACION_ASIGNACION"] = "Se conserva el templo asignado en el documento base."
         rows.append(record)
 
     cols = [
@@ -599,8 +604,8 @@ def enriquecer_capas_territoriales(puestos, iglesias):
     )
     out["NOTA_TEMPLO_PROPUESTO"] = np.where(
         out["CAMBIO_PROPUESTO_TEMPLO"].eq("SI"),
-        "Asignación sugerida por cercanía territorial; conserva iglesia histórica para análisis electoral.",
-        "La asignación propuesta coincide con la iglesia histórica 2026.",
+        "Propuesta específica para Valladolid por cercanía territorial; los demás templos conservan la asignación documental.",
+        "Se conserva la asignación documental del puesto.",
     )
     out["ROL_ANALITICO"] = np.select(
         [
