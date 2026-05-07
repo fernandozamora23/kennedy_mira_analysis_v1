@@ -420,7 +420,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 
 @st.cache_data
-def calcular_distancias_a_templos(puestos_df, iglesias_df):
+def calcular_distancias_a_templos_v2(puestos_df, iglesias_df):
     templos = iglesias_df[iglesias_df["IGLESIA"].isin(TEMPLOS_OFICIALES)].dropna(subset=["LATITUD", "LONGITUD"]).copy()
     rows = []
     for _, r in puestos_df.iterrows():
@@ -1075,7 +1075,7 @@ if (st.session_state.get("ajustes_asignacion") or st.session_state.get("ajustes_
     for col in cols_to_update:
         if col in resumen_iglesia.columns:
             resumen_iglesia[col] = resumen_iglesia[col].fillna(0)
-    asignacion = calcular_distancias_a_templos(puestos, iglesias)
+    asignacion = calcular_distancias_a_templos_v2(puestos, iglesias)
 
 # Ensure numerics
 for df in [puestos, resumen_iglesia, resumen_puesto, resumen_barrio, matriz, asignacion, resumen_asignacion]:
@@ -1504,18 +1504,13 @@ with tab_asignacion:
     ajustes_puestos = st.session_state.get("ajustes_asignacion", {})
     resumen_final = crear_resumen_asignacion(asignacion_final)
     tabla_templos = crear_tabla_puestos_por_templo(asignacion_final)
-    sugeridos_valladolid = asignacion_final[
-        asignacion_final["TEMPLO_ASIGNADO_PROPUESTO"].eq("VALLADOLID")
-        & asignacion_final["IGLESIA_ACTUAL"].ne("VALLADOLID")
-    ].copy()
-
     puestos_con_coord = asignacion_final.dropna(subset=["LATITUD", "LONGITUD"]).shape[0]
     puestos_sin_coord = len(asignacion_final) - puestos_con_coord
     templo_mayor = resumen_documental.sort_values("PUESTOS", ascending=False).iloc[0] if not resumen_documental.empty else resumen_final.sort_values("PUESTOS_ASIGNADOS", ascending=False).iloc[0]
     distancia_prom = pd.to_numeric(asignacion_final["DISTANCIA_ASIGNADA_KM"], errors="coerce").mean()
     distancia_max = pd.to_numeric(asignacion_final["DISTANCIA_ASIGNADA_KM"], errors="coerce").max()
 
-    a1, a2, a3, a4, a5, a6 = st.columns(6)
+    a1, a2, a3, a4, a5 = st.columns(5)
     with a1:
         metric_card("Total puestos", fmt_number(len(asignacion_final), 0))
     with a2:
@@ -1526,8 +1521,6 @@ with tab_asignacion:
         metric_card("Base Patio Bonito", fmt_number(resumen_documental.loc[resumen_documental["TEMPLO"].eq("PATIO BONITO"), "PUESTOS"].iloc[0] if not resumen_documental.empty else 0, 0))
     with a5:
         metric_card("Base Carvajal", fmt_number(resumen_documental.loc[resumen_documental["TEMPLO"].eq("CARVAJAL"), "PUESTOS"].iloc[0] if not resumen_documental.empty else 0, 0))
-    with a6:
-        metric_card("Propuesta Valladolid", fmt_number(len(sugeridos_valladolid), 0))
 
     mapa_asignacion = crear_mapa_asignacion(asignacion_final, iglesias)
     st_folium(mapa_asignacion, width=None, height=720)
