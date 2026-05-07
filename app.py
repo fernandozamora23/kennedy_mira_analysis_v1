@@ -13,7 +13,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import folium
-from folium.plugins import HeatMap, Fullscreen, MiniMap
+from folium.plugins import HeatMap, Fullscreen, MiniMap, MarkerCluster
 from streamlit_folium import st_folium
 
 # ============================================================
