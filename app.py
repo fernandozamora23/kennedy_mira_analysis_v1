@@ -1405,7 +1405,7 @@ with tab_mapa:
     st_folium(mapa, width=None, height=720)
 
     with st.expander("Ajustar templo de una mesa de trabajo", expanded=False):
-        st.caption("Ajuste temporal para discusión territorial. No modifica el Excel maestro.")
+        st.caption("Ajuste definitivo para modificar la asignación. No modifica el Excel maestro directamente pero sí los reportes exportables.")
         if mesas.empty:
             st.info("No hay mesas disponibles para ajustar.")
         else:
@@ -1439,7 +1439,7 @@ with tab_mapa:
                 mesa_templo = st.selectbox("Templo asignado", TEMPLOS_OFICIALES, index=mesa_index, key="templo_mesa_ajuste_compacto")
                 if st.button("Guardar ajuste de mesa"):
                     st.session_state.setdefault("ajustes_mesas", {})[mesa_row["MESA_ID"]] = mesa_templo
-                    st.success("Ajuste temporal de mesa guardado.")
+                    st.success("Ajuste de mesa guardado.")
                     st.rerun()
                 if st.button("Limpiar ajustes de mesas"):
                     st.session_state["ajustes_mesas"] = {}
