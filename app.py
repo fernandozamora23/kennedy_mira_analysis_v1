@@ -263,7 +263,32 @@ if not check_password():
     st.stop()
 
 
-# ============================================================
+AJUSTES_FILE = DATA_DIR / "ajustes_guardados.json"
+
+def cargar_ajustes_guardados():
+    if AJUSTES_FILE.exists():
+        try:
+            with open(AJUSTES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"ajustes_asignacion": {}, "ajustes_mesas": {}, "ajustes_actividades": {}}
+
+def guardar_ajustes_guardados():
+    datos = {
+        "ajustes_asignacion": st.session_state.get("ajustes_asignacion", {}),
+        "ajustes_mesas": st.session_state.get("ajustes_mesas", {}),
+        "ajustes_actividades": st.session_state.get("ajustes_actividades", {})
+    }
+    with open(AJUSTES_FILE, "w", encoding="utf-8") as f:
+        json.dump(datos, f, ensure_ascii=False, indent=2)
+
+if "ajustes_cargados" not in st.session_state:
+    ajustes_disco = cargar_ajustes_guardados()
+    st.session_state["ajustes_asignacion"] = ajustes_disco.get("ajustes_asignacion", {})
+    st.session_state["ajustes_mesas"] = ajustes_disco.get("ajustes_mesas", {})
+    st.session_state["ajustes_actividades"] = ajustes_disco.get("ajustes_actividades", {})
+    st.session_state["ajustes_cargados"] = True# ============================================================
 # FUNCIONES
 # ============================================================
 
@@ -1439,10 +1464,12 @@ with tab_mapa:
                 mesa_templo = st.selectbox("Templo asignado", TEMPLOS_OFICIALES, index=mesa_index, key="templo_mesa_ajuste_compacto")
                 if st.button("Guardar ajuste de mesa"):
                     st.session_state.setdefault("ajustes_mesas", {})[mesa_row["MESA_ID"]] = mesa_templo
+                    guardar_ajustes_guardados()
                     st.success("Ajuste de mesa guardado.")
                     st.rerun()
                 if st.button("Limpiar ajustes de mesas"):
                     st.session_state["ajustes_mesas"] = {}
+                    guardar_ajustes_guardados()
                     st.rerun()
 
     st.markdown("### Resumen operativo por templo")
@@ -1537,10 +1564,12 @@ with tab_asignacion:
             templo_nuevo = st.selectbox("Templo final", TEMPLOS_OFICIALES, index=index_templo, key="templo_puesto_ajuste_compacto")
             if st.button("Guardar ajuste de puesto"):
                 st.session_state["ajustes_asignacion"][puesto_sel] = templo_nuevo
+                guardar_ajustes_guardados()
                 st.success(f"Ajuste guardado: {puesto_sel} -> {templo_nuevo}")
                 st.rerun()
             if st.button("Limpiar ajustes de puestos"):
                 st.session_state["ajustes_asignacion"] = {}
+                guardar_ajustes_guardados()
                 st.rerun()
 
     st.markdown("### Resumen documental base")
