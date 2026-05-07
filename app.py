@@ -1429,12 +1429,8 @@ with tab_asignacion:
 
     asignacion_base = asignacion.copy()
     asignacion_final = aplicar_ajustes_asignacion(asignacion_base)
-    asignacion_final["TEMPLO_ASIGNADO_FINAL"] = asignacion_final["TEMPLO_ASIGNADO_PROPUESTO"]
-    asignacion_final["DISTANCIA_ASIGNADA_KM"] = asignacion_final.apply(
-        lambda r: r.get(DIST_COLS_TEMPLOS.get(r.get("TEMPLO_ASIGNADO_FINAL"), ""), np.nan),
-        axis=1,
-    )
     resumen_documental = crear_resumen_asignacion_por_columna(asignacion_final, "IGLESIA_ACTUAL")
+    ajustes_puestos = st.session_state.get("ajustes_asignacion", {})
     resumen_final = crear_resumen_asignacion(asignacion_final)
     tabla_templos = crear_tabla_puestos_por_templo(asignacion_final)
     sugeridos_valladolid = asignacion_final[
@@ -1465,6 +1461,43 @@ with tab_asignacion:
     mapa_asignacion = crear_mapa_asignacion(asignacion_final, iglesias)
     st_folium(mapa_asignacion, width=None, height=720)
 
+    with st.expander("Ajustar templo de un puesto de votación", expanded=False):
+        st.caption("Ajuste temporal para simular una propuesta. No modifica el documento base ni el Excel maestro.")
+        if "ajustes_asignacion" not in st.session_state:
+            st.session_state["ajustes_asignacion"] = {}
+        lista_puestos = asignacion_final["PUESTO"].dropna().sort_values().tolist()
+        puesto_sel = st.selectbox("Puesto de votación", lista_puestos, key="puesto_ajuste_compacto")
+        puesto_row = asignacion_final[asignacion_final["PUESTO"].eq(puesto_sel)].iloc[0]
+        templo_actual = puesto_row.get("TEMPLO_ASIGNADO_FINAL")
+        index_templo = TEMPLOS_OFICIALES.index(templo_actual) if templo_actual in TEMPLOS_OFICIALES else 0
+
+        p1, p2 = st.columns([2, 1])
+        with p1:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        ("Templo documento base", puesto_row.get("IGLESIA_ACTUAL")),
+                        ("Templo más cercano", puesto_row.get("TEMPLO_MAS_CERCANO")),
+                        ("Templo propuesta actual", puesto_row.get("TEMPLO_ASIGNADO_PROPUESTO")),
+                        ("Templo final simulado", puesto_row.get("TEMPLO_ASIGNADO_FINAL")),
+                        ("Votos 2026", fmt_number(puesto_row.get("VOTOS_2026"), 0)),
+                        ("Prioridad", puesto_row.get("PRIORIDAD")),
+                    ],
+                    columns=["Campo", "Valor"],
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+        with p2:
+            templo_nuevo = st.selectbox("Templo final", TEMPLOS_OFICIALES, index=index_templo, key="templo_puesto_ajuste_compacto")
+            if st.button("Guardar ajuste temporal de puesto"):
+                st.session_state["ajustes_asignacion"][puesto_sel] = templo_nuevo
+                st.success(f"Ajuste temporal guardado: {puesto_sel} -> {templo_nuevo}")
+                st.rerun()
+            if st.button("Limpiar ajustes de puestos"):
+                st.session_state["ajustes_asignacion"] = {}
+                st.rerun()
+
     st.markdown("### Resumen documental base")
     st.dataframe(resumen_documental, hide_index=True, width="stretch")
 
@@ -1478,6 +1511,8 @@ with tab_asignacion:
 
     st.markdown("### Resumen con propuesta Valladolid")
     st.dataframe(resumen_final, hide_index=True, width="stretch")
+    if ajustes_puestos:
+        st.caption(f"Resumen ajustado con {fmt_number(len(ajustes_puestos), 0)} cambio(s) temporal(es) de puesto.")
 
     st.markdown("### Puestos asignados por templo")
     st.dataframe(tabla_templos, hide_index=True, width="stretch")
