@@ -1075,7 +1075,6 @@ if (st.session_state.get("ajustes_asignacion") or st.session_state.get("ajustes_
     for col in cols_to_update:
         if col in resumen_iglesia.columns:
             resumen_iglesia[col] = resumen_iglesia[col].fillna(0)
-if asignacion.empty:
     asignacion = calcular_distancias_a_templos(puestos, iglesias)
 
 # Ensure numerics
