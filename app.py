@@ -422,6 +422,36 @@ def aplicar_ajustes_asignacion(asignacion_df):
     return df
 
 
+def aplicar_ajustes_templo(df, session_key, id_col):
+    if df is None or df.empty or id_col not in df.columns:
+        return df
+    out = df.copy()
+    if "IGLESIA_ORIGINAL" not in out.columns:
+        out["IGLESIA_ORIGINAL"] = out.get("IGLESIA", "")
+    ajustes = st.session_state.get(session_key, {})
+    if ajustes:
+        out["IGLESIA"] = out[id_col].map(ajustes).fillna(out["IGLESIA"])
+    out["TEMPLO_AJUSTADO"] = out[id_col].isin(ajustes.keys()) if ajustes else False
+    return out
+
+
+def crear_resumen_operativo_por_templo(actividades_df, mesas_df):
+    rows = []
+    for templo in TEMPLOS_OFICIALES:
+        acts = actividades_df[actividades_df.get("IGLESIA", pd.Series(dtype=str)).eq(templo)] if not actividades_df.empty else pd.DataFrame()
+        mesas_t = mesas_df[mesas_df.get("IGLESIA", pd.Series(dtype=str)).eq(templo)] if not mesas_df.empty else pd.DataFrame()
+        rows.append({
+            "TEMPLO": templo,
+            "ACTIVIDADES": int(len(acts)),
+            "VOLANTEOS": int(acts.get("TIPO_ACTIVIDAD", pd.Series(dtype=str)).astype(str).eq("VOLANTEO").sum()) if not acts.empty else 0,
+            "MESAS_TRABAJO": int(len(mesas_t)),
+            "BENEFICIARIOS_MESAS": int(pd.to_numeric(mesas_t.get("BENEFICIARIOS", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not mesas_t.empty else 0,
+            "COMPROMISOS_MESAS": int(pd.to_numeric(mesas_t.get("COMPROMISOS_TOTAL", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not mesas_t.empty else 0,
+            "AJUSTES_TEMPORALES": int(acts.get("TEMPLO_AJUSTADO", pd.Series(dtype=bool)).sum()) + int(mesas_t.get("TEMPLO_AJUSTADO", pd.Series(dtype=bool)).sum()),
+        })
+    return pd.DataFrame(rows)
+
+
 def crear_resumen_asignacion(asignacion_df):
     rows = []
     for templo in TEMPLOS_OFICIALES:
@@ -537,6 +567,49 @@ def exportar_asignacion_excel(asignacion_df, resumen_df, tabla_df):
         resumen_df.to_excel(writer, sheet_name="resumen_por_templo", index=False)
         tabla_df.to_excel(writer, sheet_name="tabla_puestos_por_templo", index=False)
     return output.getvalue()
+
+
+def generar_informe_territorial(asignacion_df, actividades_df, mesas_df):
+    resumen_puestos = crear_resumen_asignacion(asignacion_df)
+    resumen_operativo = crear_resumen_operativo_por_templo(actividades_df, mesas_df)
+    total_puestos = len(asignacion_df)
+    total_actividades = len(actividades_df)
+    total_mesas = len(mesas_df)
+    total_ajustes = len(st.session_state.get("ajustes_asignacion", {})) + len(st.session_state.get("ajustes_actividades", {})) + len(st.session_state.get("ajustes_mesas", {}))
+    mayor_puestos = resumen_puestos.sort_values("PUESTOS_ASIGNADOS", ascending=False).iloc[0] if not resumen_puestos.empty else None
+    mayor_operativo = resumen_operativo.assign(TOTAL_OPERATIVO=lambda d: d["ACTIVIDADES"] + d["MESAS_TRABAJO"]).sort_values("TOTAL_OPERATIVO", ascending=False).iloc[0] if not resumen_operativo.empty else None
+
+    lineas = [
+        "# Informe territorial de asignación y operación",
+        "",
+        "## Resumen general",
+        f"- Puestos de votación analizados: {fmt_number(total_puestos, 0)}.",
+        f"- Actividades de campaña y volanteos incluidos: {fmt_number(total_actividades, 0)}.",
+        f"- Mesas de trabajo incluidas: {fmt_number(total_mesas, 0)}.",
+        f"- Ajustes temporales aplicados en esta sesión: {fmt_number(total_ajustes, 0)}.",
+    ]
+    if mayor_puestos is not None:
+        lineas.append(f"- Mayor carga de puestos propuesta: {mayor_puestos['TEMPLO']} con {fmt_number(mayor_puestos['PUESTOS_ASIGNADOS'], 0)} puestos.")
+    if mayor_operativo is not None:
+        lineas.append(f"- Mayor concentración operativa: {mayor_operativo['TEMPLO']} con {fmt_number(mayor_operativo['ACTIVIDADES'], 0)} actividades y {fmt_number(mayor_operativo['MESAS_TRABAJO'], 0)} mesas.")
+
+    lineas.extend(["", "## Resumen por templo"])
+    for _, r in resumen_operativo.iterrows():
+        puestos_row = resumen_puestos[resumen_puestos["TEMPLO"].eq(r["TEMPLO"])]
+        puestos_count = int(puestos_row.iloc[0]["PUESTOS_ASIGNADOS"]) if not puestos_row.empty else 0
+        lineas.append(
+            f"- {r['TEMPLO']}: {fmt_number(puestos_count, 0)} puestos, "
+            f"{fmt_number(r['ACTIVIDADES'], 0)} actividades, {fmt_number(r['VOLANTEOS'], 0)} volanteos, "
+            f"{fmt_number(r['MESAS_TRABAJO'], 0)} mesas, {fmt_number(r['BENEFICIARIOS_MESAS'], 0)} beneficiarios reportados."
+        )
+
+    lineas.extend([
+        "",
+        "## Lectura metodológica",
+        "La asignación de puestos se basa en cercanía geográfica al templo; las actividades y mesas pueden reasignarse temporalmente para discusión territorial.",
+        "La propuesta debe revisarse con liderazgo comunitario, capacidad operativa, rutas, barrios priorizados y conocimiento de los equipos locales.",
+    ])
+    return "\n".join(lineas)
 
 
 def get_indicador(df, indicador, default=np.nan):
@@ -729,7 +802,8 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
                 f"""
                 <div style="font-family:Arial; width:280px;">
                 <b>Actividad:</b> {safe_html(r.get('TIPO_ACTIVIDAD',''))}<br>
-                <b>Iglesia:</b> {safe_html(r.get('IGLESIA',''))}<br>
+                <b>Templo asignado:</b> {safe_html(r.get('IGLESIA',''))}<br>
+                <b>Templo original:</b> {safe_html(r.get('IGLESIA_ORIGINAL',''))}<br>
                 <b>Barrio:</b> {safe_html(r.get('BARRIO',''))}<br>
                 <b>Líder:</b> {safe_html(r.get('LIDER',''))}<br>
                 <b>Dirección:</b> {safe_html(r.get('DIRECCION',''))}<br>
@@ -751,7 +825,8 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
                 f"""
                 <div style="font-family:Arial; width:300px;">
                 <b>Mesa:</b> {safe_html(r.get('TEMA',''))}<br>
-                <b>Iglesia:</b> {safe_html(r.get('IGLESIA',''))}<br>
+                <b>Templo asignado:</b> {safe_html(r.get('IGLESIA',''))}<br>
+                <b>Templo original:</b> {safe_html(r.get('IGLESIA_ORIGINAL',''))}<br>
                 <b>Barrio:</b> {safe_html(r.get('BARRIO',''))}<br>
                 <b>Líder:</b> {safe_html(r.get('LIDER',''))}<br>
                 <b>Concejal:</b> {safe_html(r.get('CONCEJAL',''))}<br>
@@ -850,6 +925,8 @@ actividades = filtrar_iglesias(actividades)
 mesas = filtrar_iglesias(mesas)
 iglesias = filtrar_iglesias(iglesias)
 resumen_iglesia = filtrar_iglesias(resumen_iglesia)
+actividades = aplicar_ajustes_templo(actividades, "ajustes_actividades", "ACTIVIDAD_ID")
+mesas = aplicar_ajustes_templo(mesas, "ajustes_mesas", "MESA_ID")
 if asignacion.empty:
     asignacion = calcular_distancias_a_templos(puestos, iglesias)
 
@@ -1129,11 +1206,113 @@ with tab_resumen:
 with tab_mapa:
     st.subheader("Mapa interactivo territorial")
     st.markdown(
-        '<div class="note-box">Los puestos de votación se muestran como puntos fijos para lectura territorial estable. Active o desactive capas para comparar iglesias, mesas, actividades, calor electoral y variación.</div>',
+        '<div class="note-box">Este mapa permite revisar presencia territorial, mesas de trabajo y actividades de campaña por templo. Los cambios de templo hechos aquí son temporales y sirven para discusión operativa; no modifican el Excel maestro.</div>',
         unsafe_allow_html=True,
     )
+    resumen_operativo_mapa = crear_resumen_operativo_por_templo(actividades_f, mesas_f)
+    map_a1, map_a2, map_a3, map_a4 = st.columns(4)
+    with map_a1:
+        metric_card("Puestos visibles", fmt_number(len(puestos_f), 0))
+    with map_a2:
+        metric_card("Actividades visibles", fmt_number(len(actividades_f), 0))
+    with map_a3:
+        metric_card("Mesas visibles", fmt_number(len(mesas_f), 0))
+    with map_a4:
+        ajustes_operativos = len(st.session_state.get("ajustes_actividades", {})) + len(st.session_state.get("ajustes_mesas", {}))
+        metric_card("Ajustes operativos", fmt_number(ajustes_operativos, 0))
+
     mapa = crear_mapa(puestos_f, iglesias, actividades_f, mesas_f)
     st_folium(mapa, width=None, height=720)
+
+    st.markdown("### Ajustar templo de actividades y mesas")
+    c_act, c_mesa = st.columns(2)
+    with c_act:
+        st.markdown("**Actividades de campaña**")
+        if actividades.empty:
+            st.info("No hay actividades disponibles.")
+        else:
+            act_tmp = actividades.copy()
+            act_tmp["LABEL"] = act_tmp.apply(
+                lambda r: f"{int(r['ACTIVIDAD_ID'])} · {r.get('TIPO_ACTIVIDAD','')} · {r.get('BARRIO','SIN BARRIO')} · {r.get('IGLESIA','')}",
+                axis=1,
+            )
+            act_label = st.selectbox("Selecciona una actividad", act_tmp["LABEL"].tolist(), key="sel_actividad_ajuste")
+            act_row = act_tmp[act_tmp["LABEL"].eq(act_label)].iloc[0]
+            act_index = TEMPLOS_OFICIALES.index(act_row["IGLESIA"]) if act_row.get("IGLESIA") in TEMPLOS_OFICIALES else 0
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        ("Tipo", act_row.get("TIPO_ACTIVIDAD")),
+                        ("Barrio", act_row.get("BARRIO")),
+                        ("Templo original", act_row.get("IGLESIA_ORIGINAL")),
+                        ("Templo actual", act_row.get("IGLESIA")),
+                        ("Líder", act_row.get("LIDER")),
+                    ],
+                    columns=["Campo", "Valor"],
+                ),
+                hide_index=True,
+                use_container_width=True,
+            )
+            act_templo = st.selectbox("Asignar actividad al templo", TEMPLOS_OFICIALES, index=act_index, key="templo_actividad_ajuste")
+            if st.button("Guardar ajuste de actividad"):
+                st.session_state.setdefault("ajustes_actividades", {})[act_row["ACTIVIDAD_ID"]] = act_templo
+                st.success("Ajuste temporal de actividad guardado.")
+                st.rerun()
+
+    with c_mesa:
+        st.markdown("**Mesas de trabajo**")
+        if mesas.empty:
+            st.info("No hay mesas disponibles.")
+        else:
+            mesa_tmp = mesas.copy()
+            mesa_tmp["LABEL"] = mesa_tmp.apply(
+                lambda r: f"{int(r['MESA_ID'])} · {r.get('NOMBRE_GESTION', r.get('TEMA',''))} · {r.get('BARRIO','SIN BARRIO')} · {r.get('IGLESIA','')}",
+                axis=1,
+            )
+            mesa_label = st.selectbox("Selecciona una mesa", mesa_tmp["LABEL"].tolist(), key="sel_mesa_ajuste")
+            mesa_row = mesa_tmp[mesa_tmp["LABEL"].eq(mesa_label)].iloc[0]
+            mesa_index = TEMPLOS_OFICIALES.index(mesa_row["IGLESIA"]) if mesa_row.get("IGLESIA") in TEMPLOS_OFICIALES else 0
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        ("Tema", mesa_row.get("TEMA")),
+                        ("Barrio", mesa_row.get("BARRIO")),
+                        ("Templo original", mesa_row.get("IGLESIA_ORIGINAL")),
+                        ("Templo actual", mesa_row.get("IGLESIA")),
+                        ("Líder", mesa_row.get("LIDER")),
+                        ("Estado", mesa_row.get("ESTADO")),
+                    ],
+                    columns=["Campo", "Valor"],
+                ),
+                hide_index=True,
+                use_container_width=True,
+            )
+            mesa_templo = st.selectbox("Asignar mesa al templo", TEMPLOS_OFICIALES, index=mesa_index, key="templo_mesa_ajuste")
+            if st.button("Guardar ajuste de mesa"):
+                st.session_state.setdefault("ajustes_mesas", {})[mesa_row["MESA_ID"]] = mesa_templo
+                st.success("Ajuste temporal de mesa guardado.")
+                st.rerun()
+
+    clear_c1, clear_c2 = st.columns([1, 3])
+    with clear_c1:
+        if st.button("Limpiar ajustes de mapa territorial"):
+            st.session_state["ajustes_actividades"] = {}
+            st.session_state["ajustes_mesas"] = {}
+            st.rerun()
+
+    st.markdown("### Resumen operativo por templo")
+    st.dataframe(resumen_operativo_mapa, hide_index=True, use_container_width=True)
+
+    asignacion_reporte_mapa = aplicar_ajustes_asignacion(asignacion.copy())
+    informe_mapa = generar_informe_territorial(asignacion_reporte_mapa, actividades, mesas)
+    with st.expander("Informe territorial automático", expanded=True):
+        st.markdown(informe_mapa)
+        st.download_button(
+            "Descargar informe territorial",
+            informe_mapa.encode("utf-8"),
+            "informe_territorial_operativo.md",
+            "text/markdown",
+        )
 
 with tab_asignacion:
     st.subheader("Asignación territorial de puestos")
