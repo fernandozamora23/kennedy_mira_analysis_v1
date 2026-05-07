@@ -482,6 +482,27 @@ def crear_resumen_asignacion(asignacion_df):
     return pd.DataFrame(rows)
 
 
+def crear_resumen_asignacion_por_columna(asignacion_df, templo_col):
+    if asignacion_df.empty or templo_col not in asignacion_df.columns:
+        return pd.DataFrame()
+    rows = []
+    for templo in TEMPLOS_OFICIALES:
+        sub = asignacion_df[asignacion_df[templo_col].eq(templo)].copy()
+        v26 = pd.to_numeric(sub.get("VOTOS_2026", pd.Series(dtype=float)), errors="coerce").sum()
+        v23 = pd.to_numeric(sub.get("VOTOS_2023", pd.Series(dtype=float)), errors="coerce").sum()
+        var_abs = v26 - v23
+        rows.append({
+            "TEMPLO": templo,
+            "PUESTOS": int(len(sub)),
+            "VOTOS_2026": int(round(v26)),
+            "VOTOS_2023": int(round(v23)),
+            "VARIACION_ABSOLUTA": int(round(var_abs)),
+            "VARIACION_PORCENTUAL": var_abs / v23 if v23 else np.nan,
+            "PRIORIDAD_ALTA": int(sub.get("PRIORIDAD", pd.Series(dtype=str)).astype(str).str.upper().eq("ALTA").sum()),
+        })
+    return pd.DataFrame(rows)
+
+
 def crear_tabla_puestos_por_templo(asignacion_df):
     grupos = {
         templo: asignacion_df[asignacion_df["TEMPLO_ASIGNADO_FINAL"].eq(templo)]["PUESTO"].sort_values().tolist()
@@ -1398,12 +1419,22 @@ with tab_asignacion:
 
     asignacion_base = asignacion.copy()
     asignacion_final = aplicar_ajustes_asignacion(asignacion_base)
+    asignacion_final["TEMPLO_ASIGNADO_FINAL"] = asignacion_final["TEMPLO_ASIGNADO_PROPUESTO"]
+    asignacion_final["DISTANCIA_ASIGNADA_KM"] = asignacion_final.apply(
+        lambda r: r.get(DIST_COLS_TEMPLOS.get(r.get("TEMPLO_ASIGNADO_FINAL"), ""), np.nan),
+        axis=1,
+    )
+    resumen_documental = crear_resumen_asignacion_por_columna(asignacion_final, "IGLESIA_ACTUAL")
     resumen_final = crear_resumen_asignacion(asignacion_final)
     tabla_templos = crear_tabla_puestos_por_templo(asignacion_final)
+    sugeridos_valladolid = asignacion_final[
+        asignacion_final["TEMPLO_ASIGNADO_PROPUESTO"].eq("VALLADOLID")
+        & asignacion_final["IGLESIA_ACTUAL"].ne("VALLADOLID")
+    ].copy()
 
     puestos_con_coord = asignacion_final.dropna(subset=["LATITUD", "LONGITUD"]).shape[0]
     puestos_sin_coord = len(asignacion_final) - puestos_con_coord
-    templo_mayor = resumen_final.sort_values("PUESTOS_ASIGNADOS", ascending=False).iloc[0]
+    templo_mayor = resumen_documental.sort_values("PUESTOS", ascending=False).iloc[0] if not resumen_documental.empty else resumen_final.sort_values("PUESTOS_ASIGNADOS", ascending=False).iloc[0]
     distancia_prom = pd.to_numeric(asignacion_final["DISTANCIA_ASIGNADA_KM"], errors="coerce").mean()
     distancia_max = pd.to_numeric(asignacion_final["DISTANCIA_ASIGNADA_KM"], errors="coerce").max()
 
@@ -1411,72 +1442,42 @@ with tab_asignacion:
     with a1:
         metric_card("Total puestos", fmt_number(len(asignacion_final), 0))
     with a2:
-        metric_card("Con coordenadas", fmt_number(puestos_con_coord, 0))
+        metric_card("Base Class Roma", fmt_number(resumen_documental.loc[resumen_documental["TEMPLO"].eq("CLASS ROMA"), "PUESTOS"].iloc[0] if not resumen_documental.empty else 0, 0))
     with a3:
-        metric_card("Sin coordenadas", fmt_number(puestos_sin_coord, 0))
+        metric_card("Base Kennedy Central", fmt_number(resumen_documental.loc[resumen_documental["TEMPLO"].eq("KENNEDY CENTRAL"), "PUESTOS"].iloc[0] if not resumen_documental.empty else 0, 0))
     with a4:
-        metric_card("Mayor carga", safe_html(templo_mayor["TEMPLO"]))
+        metric_card("Base Patio Bonito", fmt_number(resumen_documental.loc[resumen_documental["TEMPLO"].eq("PATIO BONITO"), "PUESTOS"].iloc[0] if not resumen_documental.empty else 0, 0))
     with a5:
-        metric_card("Distancia promedio", f"{fmt_number(distancia_prom, 2)} km")
+        metric_card("Base Carvajal", fmt_number(resumen_documental.loc[resumen_documental["TEMPLO"].eq("CARVAJAL"), "PUESTOS"].iloc[0] if not resumen_documental.empty else 0, 0))
     with a6:
-        metric_card("Distancia máxima", f"{fmt_number(distancia_max, 2)} km")
+        metric_card("Propuesta Valladolid", fmt_number(len(sugeridos_valladolid), 0))
 
     mapa_asignacion = crear_mapa_asignacion(asignacion_final, iglesias)
     st_folium(mapa_asignacion, width=None, height=720)
 
-    st.markdown("### Ajuste temporal de asignación")
-    if "ajustes_asignacion" not in st.session_state:
-        st.session_state["ajustes_asignacion"] = {}
+    st.markdown("### Resumen documental base")
+    st.dataframe(resumen_documental, hide_index=True, width="stretch")
 
-    lista_puestos = asignacion_final["PUESTO"].dropna().sort_values().tolist()
-    puesto_sel = st.selectbox("Selecciona un puesto de votación", lista_puestos)
-    puesto_row = asignacion_final[asignacion_final["PUESTO"].eq(puesto_sel)].iloc[0]
-    templo_actual = puesto_row.get("TEMPLO_ASIGNADO_FINAL")
-    index_templo = TEMPLOS_OFICIALES.index(templo_actual) if templo_actual in TEMPLOS_OFICIALES else 0
-
-    info_cols = [
-        ("Barrio", puesto_row.get("BARRIO")),
-        ("Dirección", puesto_row.get("DIRECCION")),
-        ("UPZ", puesto_row.get("UPZ")),
-        ("Iglesia actual", puesto_row.get("IGLESIA_ACTUAL")),
-        ("Templo más cercano", puesto_row.get("TEMPLO_MAS_CERCANO")),
-        ("Votos 2026", fmt_number(puesto_row.get("VOTOS_2026"), 0)),
-        ("Prioridad", puesto_row.get("PRIORIDAD")),
+    st.markdown("### Propuesta Valladolid")
+    valladolid_cols = [
+        "PUESTO", "IGLESIA_ACTUAL", "TEMPLO_MAS_CERCANO", "TEMPLO_ASIGNADO_PROPUESTO",
+        "DISTANCIA_MINIMA_KM", "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "PRIORIDAD",
     ]
-    st.dataframe(pd.DataFrame(info_cols, columns=["Campo", "Valor"]), hide_index=True, width="stretch")
+    valladolid_cols = [c for c in valladolid_cols if c in sugeridos_valladolid.columns]
+    st.dataframe(sugeridos_valladolid[valladolid_cols].sort_values("DISTANCIA_MINIMA_KM"), hide_index=True, width="stretch")
 
-    dist_info = pd.DataFrame(
-        [{"Templo": templo, "Distancia km": puesto_row.get(col)} for templo, col in DIST_COLS_TEMPLOS.items()]
-    )
-    st.dataframe(dist_info, hide_index=True, width="stretch")
-
-    templo_nuevo = st.selectbox("Asignar este puesto al templo", TEMPLOS_OFICIALES, index=index_templo)
-    col_guardar, col_limpiar = st.columns([1, 3])
-    with col_guardar:
-        if st.button("Guardar ajuste temporal"):
-            st.session_state["ajustes_asignacion"][puesto_sel] = templo_nuevo
-            st.success(f"Ajuste temporal guardado: {puesto_sel} → {templo_nuevo}")
-            st.rerun()
-    with col_limpiar:
-        if st.button("Limpiar ajustes temporales"):
-            st.session_state["ajustes_asignacion"] = {}
-            st.rerun()
-
-    st.markdown("### Resumen por templo")
+    st.markdown("### Resumen con propuesta Valladolid")
     st.dataframe(resumen_final, hide_index=True, width="stretch")
 
     st.markdown("### Puestos asignados por templo")
     st.dataframe(tabla_templos, hide_index=True, width="stretch")
 
     with st.expander("Lectura automática de la asignación", expanded=True):
-        templo_menor = resumen_final.sort_values("PUESTOS_ASIGNADOS", ascending=True).iloc[0]
         puestos_lejanos = int(pd.to_numeric(asignacion_final["DISTANCIA_ASIGNADA_KM"], errors="coerce").gt(3).sum())
-        alta_por_templo = resumen_final.sort_values("PUESTOS_PRIORIDAD_ALTA", ascending=False).iloc[0]
-        st.write(f"El templo con mayor carga territorial propuesta es {templo_mayor['TEMPLO']}, con {fmt_number(templo_mayor['PUESTOS_ASIGNADOS'], 0)} puestos asignados.")
-        st.write(f"El templo con menor carga territorial propuesta es {templo_menor['TEMPLO']}, con {fmt_number(templo_menor['PUESTOS_ASIGNADOS'], 0)} puestos asignados.")
-        st.write(f"La distancia promedio entre puestos y templos asignados es de {fmt_number(distancia_prom, 2)} km.")
+        st.write(f"La base documental conserva mayor carga en {templo_mayor['TEMPLO']}, con {fmt_number(templo_mayor['PUESTOS'], 0)} puestos.")
+        st.write(f"La propuesta específica para Valladolid identifica {fmt_number(len(sugeridos_valladolid), 0)} puestos por cercanía territorial.")
+        st.write(f"La distancia promedio hacia el templo propuesto, solo para lectura logística, es de {fmt_number(distancia_prom, 2)} km.")
         st.write(f"Hay {fmt_number(puestos_lejanos, 0)} puestos a más de 3 km del templo asignado, que requieren revisión logística.")
-        st.write(f"Hay {fmt_number(alta_por_templo['PUESTOS_PRIORIDAD_ALTA'], 0)} puestos de prioridad alta asignados a {alta_por_templo['TEMPLO']}.")
 
     with st.expander("Advertencias metodológicas"):
         st.write(
