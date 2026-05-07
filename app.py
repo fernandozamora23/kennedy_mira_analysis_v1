@@ -324,6 +324,7 @@ def safe_html(value, default="Sin dato"):
     return html.escape(text) if text else default
 
 
+@st.cache_data
 def cargar_geojson(path: Path):
     if not path.exists():
         return None
@@ -393,6 +394,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return 2 * radio_tierra_km * math.asin(math.sqrt(a))
 
 
+@st.cache_data
 def calcular_distancias_a_templos(puestos_df, iglesias_df):
     templos = iglesias_df[iglesias_df["IGLESIA"].isin(TEMPLOS_OFICIALES)].dropna(subset=["LATITUD", "LONGITUD"]).copy()
     rows = []
@@ -1021,6 +1023,40 @@ iglesias = filtrar_iglesias(iglesias)
 resumen_iglesia = filtrar_iglesias(resumen_iglesia)
 actividades = aplicar_ajustes_templo(actividades, "ajustes_actividades", "ACTIVIDAD_ID")
 mesas = aplicar_ajustes_templo(mesas, "ajustes_mesas", "MESA_ID")
+puestos = aplicar_ajustes_templo(puestos, "ajustes_asignacion", "PUESTO")
+if not matriz.empty:
+    matriz = aplicar_ajustes_templo(matriz, "ajustes_asignacion", "PUESTO")
+
+if (st.session_state.get("ajustes_asignacion") or st.session_state.get("ajustes_actividades") or st.session_state.get("ajustes_mesas")) and not resumen_iglesia.empty:
+    agregado_puestos = puestos.groupby("IGLESIA").agg(
+        VOTOS_2026=("VOTOS_2026", "sum"),
+        VOTOS_2023=("VOTOS_2023", "sum"),
+        PUESTOS=("PUESTO", "nunique")
+    ).reset_index()
+    agregado_puestos["VARIACION_ABSOLUTA"] = agregado_puestos["VOTOS_2026"] - agregado_puestos["VOTOS_2023"]
+    agregado_puestos["VARIACION_PORCENTUAL"] = np.where(agregado_puestos["VOTOS_2023"] > 0, agregado_puestos["VARIACION_ABSOLUTA"] / agregado_puestos["VOTOS_2023"], 0)
+    
+    if not actividades.empty and "IGLESIA" in actividades.columns:
+        agregado_acts = actividades.groupby("IGLESIA").size().reset_index(name="ACTIVIDADES_CAMPANA")
+    else:
+        agregado_acts = pd.DataFrame(columns=["IGLESIA", "ACTIVIDADES_CAMPANA"])
+        
+    if not mesas.empty and "IGLESIA" in mesas.columns:
+        agregado_mesas = mesas.groupby("IGLESIA").size().reset_index(name="MESAS_TRABAJO")
+    else:
+        agregado_mesas = pd.DataFrame(columns=["IGLESIA", "MESAS_TRABAJO"])
+        
+    cols_to_update = ["VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "PUESTOS", "ACTIVIDADES_CAMPANA", "MESAS_TRABAJO"]
+    cols_to_drop = [c for c in cols_to_update if c in resumen_iglesia.columns]
+    resumen_iglesia = resumen_iglesia.drop(columns=cols_to_drop)
+    
+    resumen_iglesia = resumen_iglesia.merge(agregado_puestos, on="IGLESIA", how="left")
+    resumen_iglesia = resumen_iglesia.merge(agregado_acts, on="IGLESIA", how="left")
+    resumen_iglesia = resumen_iglesia.merge(agregado_mesas, on="IGLESIA", how="left")
+    
+    for col in cols_to_update:
+        if col in resumen_iglesia.columns:
+            resumen_iglesia[col] = resumen_iglesia[col].fillna(0)
 if asignacion.empty:
     asignacion = calcular_distancias_a_templos(puestos, iglesias)
 
@@ -1344,19 +1380,35 @@ with tab_mapa:
         '<div class="note-box">Este mapa permite revisar presencia territorial, mesas de trabajo y actividades de campaña por templo. Los cambios de templo hechos aquí son temporales y sirven para discusión operativa; no modifican el Excel maestro.</div>',
         unsafe_allow_html=True,
     )
-    resumen_operativo_mapa = crear_resumen_operativo_por_templo(actividades_f, mesas_f)
+    opciones_templo = ["Todos los templos"] + list(IGLESIAS_OFICIALES_PERMITIDAS)
+    filtro_templo = st.selectbox("Filtrar vista del mapa por templo", opciones_templo, key="filtro_mapa_templo")
+
+    puestos_mapa = puestos_f.copy()
+    acts_mapa = actividades_f.copy()
+    mesas_mapa = mesas_f.copy()
+    iglesias_mapa = iglesias.copy()
+
+    if filtro_templo != "Todos los templos":
+        puestos_mapa = puestos_mapa[puestos_mapa["IGLESIA"].eq(filtro_templo)]
+        if "IGLESIA" in acts_mapa.columns:
+            acts_mapa = acts_mapa[acts_mapa["IGLESIA"].eq(filtro_templo)]
+        if "IGLESIA" in mesas_mapa.columns:
+            mesas_mapa = mesas_mapa[mesas_mapa["IGLESIA"].eq(filtro_templo)]
+        iglesias_mapa = iglesias_mapa[iglesias_mapa["IGLESIA"].eq(filtro_templo)]
+
+    resumen_operativo_mapa = crear_resumen_operativo_por_templo(acts_mapa, mesas_mapa)
     map_a1, map_a2, map_a3, map_a4 = st.columns(4)
     with map_a1:
-        metric_card("Puestos visibles", fmt_number(len(puestos_f), 0))
+        metric_card("Puestos visibles", fmt_number(len(puestos_mapa), 0))
     with map_a2:
-        metric_card("Actividades visibles", fmt_number(len(actividades_f), 0))
+        metric_card("Actividades visibles", fmt_number(len(acts_mapa), 0))
     with map_a3:
-        metric_card("Mesas visibles", fmt_number(len(mesas_f), 0))
+        metric_card("Mesas visibles", fmt_number(len(mesas_mapa), 0))
     with map_a4:
         ajustes_operativos = len(st.session_state.get("ajustes_actividades", {})) + len(st.session_state.get("ajustes_mesas", {}))
         metric_card("Ajustes operativos", fmt_number(ajustes_operativos, 0))
 
-    mapa = crear_mapa(puestos_f, iglesias, actividades_f, mesas_f)
+    mapa = crear_mapa(puestos_mapa, iglesias_mapa, acts_mapa, mesas_mapa)
     st_folium(mapa, width=None, height=720)
 
     with st.expander("Ajustar templo de una mesa de trabajo", expanded=False):
