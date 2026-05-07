@@ -611,15 +611,22 @@ def generar_informe_territorial(asignacion_df, actividades_df, mesas_df):
 
 
 def generar_informe_ejecutivo_markdown(puestos_df, resumen_iglesia_df, matriz_df, actividades_df, mesas_df):
-    total_2026 = pd.to_numeric(puestos_df.get("VOTOS_2026", pd.Series(dtype=float)), errors="coerce").sum()
-    total_2023 = pd.to_numeric(puestos_df.get("VOTOS_2023", pd.Series(dtype=float)), errors="coerce").sum()
+    def col_serie(df, col, default=""):
+        if df is None or df.empty:
+            return pd.Series(dtype=object)
+        if col in df.columns:
+            return df[col]
+        return pd.Series(default, index=df.index)
+
+    total_2026 = pd.to_numeric(col_serie(puestos_df, "VOTOS_2026", 0), errors="coerce").sum()
+    total_2023 = pd.to_numeric(col_serie(puestos_df, "VOTOS_2023", 0), errors="coerce").sum()
     variacion = total_2026 - total_2023
     variacion_pct = variacion / total_2023 if total_2023 else np.nan
-    altas = matriz_df[matriz_df.get("NIVEL_PRIORIDAD", pd.Series(dtype=str)).astype(str).eq("ALTA")].copy() if not matriz_df.empty else pd.DataFrame()
-    cambios = puestos_df[puestos_df.get("CAMBIO_PROPUESTO_TEMPLO", pd.Series(dtype=str)).astype(str).eq("SI")].copy()
-    top_iglesia = resumen_iglesia_df.sort_values("VOTOS_2026", ascending=False).iloc[0] if not resumen_iglesia_df.empty else None
-    mayor_caida = puestos_df.sort_values("VARIACION_ABSOLUTA", ascending=True).head(5)
-    mayor_crecimiento = puestos_df.sort_values("VARIACION_ABSOLUTA", ascending=False).head(5)
+    altas = matriz_df[col_serie(matriz_df, "NIVEL_PRIORIDAD").astype(str).eq("ALTA")].copy() if not matriz_df.empty else pd.DataFrame()
+    cambios = puestos_df[col_serie(puestos_df, "CAMBIO_PROPUESTO_TEMPLO").astype(str).eq("SI")].copy() if not puestos_df.empty else pd.DataFrame()
+    top_iglesia = resumen_iglesia_df.sort_values("VOTOS_2026", ascending=False).iloc[0] if not resumen_iglesia_df.empty and "VOTOS_2026" in resumen_iglesia_df.columns else None
+    mayor_caida = puestos_df.assign(_VAR=pd.to_numeric(col_serie(puestos_df, "VARIACION_ABSOLUTA", 0), errors="coerce")).sort_values("_VAR", ascending=True).head(5)
+    mayor_crecimiento = puestos_df.assign(_VAR=pd.to_numeric(col_serie(puestos_df, "VARIACION_ABSOLUTA", 0), errors="coerce")).sort_values("_VAR", ascending=False).head(5)
 
     lineas = [
         "# Informe ejecutivo territorial-electoral Kennedy",
