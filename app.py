@@ -16,8 +16,6 @@ import folium
 from folium.plugins import HeatMap, Fullscreen, MiniMap
 from streamlit_folium import st_folium
 
-st.cache_data.clear()
-
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
@@ -612,6 +610,55 @@ def generar_informe_territorial(asignacion_df, actividades_df, mesas_df):
     return "\n".join(lineas)
 
 
+def generar_informe_ejecutivo_markdown(puestos_df, resumen_iglesia_df, matriz_df, actividades_df, mesas_df):
+    total_2026 = pd.to_numeric(puestos_df.get("VOTOS_2026", pd.Series(dtype=float)), errors="coerce").sum()
+    total_2023 = pd.to_numeric(puestos_df.get("VOTOS_2023", pd.Series(dtype=float)), errors="coerce").sum()
+    variacion = total_2026 - total_2023
+    variacion_pct = variacion / total_2023 if total_2023 else np.nan
+    altas = matriz_df[matriz_df.get("NIVEL_PRIORIDAD", pd.Series(dtype=str)).astype(str).eq("ALTA")].copy() if not matriz_df.empty else pd.DataFrame()
+    cambios = puestos_df[puestos_df.get("CAMBIO_PROPUESTO_TEMPLO", pd.Series(dtype=str)).astype(str).eq("SI")].copy()
+    top_iglesia = resumen_iglesia_df.sort_values("VOTOS_2026", ascending=False).iloc[0] if not resumen_iglesia_df.empty else None
+    mayor_caida = puestos_df.sort_values("VARIACION_ABSOLUTA", ascending=True).head(5)
+    mayor_crecimiento = puestos_df.sort_values("VARIACION_ABSOLUTA", ascending=False).head(5)
+
+    lineas = [
+        "# Informe ejecutivo territorial-electoral Kennedy",
+        "",
+        "## 1. Resumen general",
+        f"Kennedy registra {fmt_number(total_2026, 0)} votos 2026 frente a {fmt_number(total_2023, 0)} votos 2023, con una variación de {fmt_number(variacion, 0)} votos ({fmt_pct(variacion_pct)}).",
+        f"El análisis integra {fmt_number(len(puestos_df), 0)} puestos de votación, {fmt_number(len(actividades_df), 0)} actividades de campaña y {fmt_number(len(mesas_df), 0)} mesas de trabajo.",
+        "",
+        "## 2. Hallazgos principales",
+        f"- Puestos de prioridad alta: {fmt_number(len(altas), 0)}.",
+        f"- Puestos con cambio operativo de templo sugerido: {fmt_number(len(cambios), 0)}.",
+    ]
+    if top_iglesia is not None:
+        lineas.append(f"- Mayor concentración electoral 2026: {top_iglesia['IGLESIA']} con {fmt_number(top_iglesia['VOTOS_2026'], 0)} votos.")
+
+    lineas.extend(["", "## 3. Puestos críticos de recuperación"])
+    for _, r in mayor_caida.iterrows():
+        lineas.append(f"- {r.get('PUESTO')}: {fmt_number(r.get('VARIACION_ABSOLUTA'), 0)} votos; responsable sugerido {r.get('TEMPLO_PROPUESTO', r.get('IGLESIA'))}.")
+
+    lineas.extend(["", "## 4. Puestos de consolidación"])
+    for _, r in mayor_crecimiento.iterrows():
+        lineas.append(f"- {r.get('PUESTO')}: +{fmt_number(r.get('VARIACION_ABSOLUTA'), 0)} votos; mantener presencia comunitaria y testigos.")
+
+    lineas.extend([
+        "",
+        "## 5. Recomendaciones estratégicas",
+        "- Revisar primero puestos de alta votación con caída y baja presencia territorial.",
+        "- Validar políticamente los cambios de templo sugeridos antes de convertirlos en decisión operativa.",
+        "- Completar barrio y UPZ para producir una lectura de concentración territorial más fina.",
+        "- Usar la asignación territorial como herramienta de discusión, no como decisión automática definitiva.",
+        "",
+        "## 6. Agenda sugerida 30/60/90",
+        "- 0-30 días: revisión de puestos de prioridad alta, responsables y agenda territorial.",
+        "- 31-60 días: mesas comunitarias en puestos de recuperación y zonas de oportunidad.",
+        "- 61-90 días: consolidación de testigos, líderes y seguimiento por templo.",
+    ])
+    return "\n".join(lineas)
+
+
 def get_indicador(df, indicador, default=np.nan):
     if df is None or df.empty:
         return default
@@ -944,7 +991,7 @@ for df in [puestos, resumen_iglesia, resumen_puesto, resumen_barrio, matriz, asi
             "CAMARA_2026", "SENADO_2026", "CENSO_2023", "BENEFICIARIOS", "MESAS_2026_REPORTE",
             "TESTIGOS_2023_REPORTE", "VOTOS_AFINIDAD_E11_2023", "VOTOS_MIRA_2023_PROP_LISTA",
             "ACTIVIDADES_CAMPANA", "ACTIVIDADES_CAMPANA_IGLESIA", "MESAS_TRABAJO_BARRIO",
-            "MESAS_TRABAJO", "PUESTOS",
+            "MESAS_TRABAJO", "PUESTOS", "PUNTAJE_PRIORIDAD",
         ]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").round().astype("Int64")
@@ -1031,6 +1078,12 @@ camara_total = get_indicador(resumen_general, "Cámara 2026 Kennedy")
 senado_total = get_indicador(resumen_general, "Senado 2026 Kennedy")
 mesas_2026_reporte = get_indicador(resumen_general, "Mesas 2026 reporte localidad")
 testigos_2023_reporte = get_indicador(resumen_general, "Testigos 2023 reporte localidad")
+puestos_alta = get_indicador(resumen_general, "Puestos prioridad alta", default=np.nan)
+if pd.isna(puestos_alta) and "PRIORIDAD" in puestos.columns:
+    puestos_alta = int(puestos["PRIORIDAD"].astype(str).eq("ALTA").sum())
+puestos_cambio_templo = get_indicador(resumen_general, "Puestos con cambio de templo sugerido", default=np.nan)
+if pd.isna(puestos_cambio_templo) and "CAMBIO_PROPUESTO_TEMPLO" in puestos.columns:
+    puestos_cambio_templo = int(puestos["CAMBIO_PROPUESTO_TEMPLO"].astype(str).eq("SI").sum())
 
 c1, c2, c3, c4 = st.columns(4)
 with c1:
@@ -1056,13 +1109,13 @@ c9, c10, c11, c12, c13 = st.columns(5)
 with c9:
     metric_card("Iglesias oficiales", fmt_number(iglesias_total, 0))
 with c10:
-    metric_card("JAL 2023", fmt_number(jal_total, 0))
+    metric_card("Prioridad alta", fmt_number(puestos_alta, 0))
 with c11:
-    metric_card("Concejo 2023", fmt_number(concejo_total, 0))
+    metric_card("Cambios sugeridos", fmt_number(puestos_cambio_templo, 0))
 with c12:
-    metric_card("Cámara 2026", fmt_number(camara_total, 0))
+    metric_card("JAL / Concejo 2023", f"{fmt_number(jal_total, 0)} / {fmt_number(concejo_total, 0)}")
 with c13:
-    metric_card("Senado 2026", fmt_number(senado_total, 0))
+    metric_card("Cámara / Senado 2026", f"{fmt_number(camara_total, 0)} / {fmt_number(senado_total, 0)}")
 
 st.markdown(
     f"""
@@ -1071,7 +1124,7 @@ st.markdown(
     <b>Cámara / Senado 2026</b>, mantiene solo las cinco iglesias oficiales y cruza puestos fijos,
     <b>{fmt_number(actividades_oficiales_total, 0)} actividades oficiales</b>,
     <b>{fmt_number(volanteos_total, 0)} volanteos confirmados</b> y mesas de trabajo con prioridad territorial.
-    La capa geográfica usa localidades de Bogotá como contexto y UPZ Kennedy solo cuando exista una capa oficial.
+    La lectura distingue iglesia histórica 2026, templo operativo actual y templo propuesto para discusión territorial.
     </div>
     """,
     unsafe_allow_html=True,
@@ -1106,6 +1159,41 @@ with tab_resumen:
         """,
         unsafe_allow_html=True,
     )
+    informe_ejecutivo_md = generar_informe_ejecutivo_markdown(puestos, resumen_iglesia, matriz, actividades, mesas)
+
+    foco_cols = [
+        "NIVEL_PRIORIDAD", "PUNTAJE_PRIORIDAD", "ROL_ANALITICO", "PUESTO", "IGLESIA_HISTORICA_2026",
+        "TEMPLO_PROPUESTO", "VOTOS_2026", "VARIACION_ABSOLUTA", "FACTORES_PRIORIDAD", "ACCION_RECOMENDADA",
+    ]
+    foco_cols = [c for c in foco_cols if c in matriz.columns]
+    focos = matriz[foco_cols].sort_values(
+        [c for c in ["NIVEL_PRIORIDAD", "PUNTAJE_PRIORIDAD", "VOTOS_2026"] if c in matriz.columns],
+        ascending=[True, False, False][: len([c for c in ["NIVEL_PRIORIDAD", "PUNTAJE_PRIORIDAD", "VOTOS_2026"] if c in matriz.columns])],
+    ).head(12)
+
+    st.markdown("### Panel de decisión")
+    dcol1, dcol2 = st.columns([2, 1])
+    with dcol1:
+        st.dataframe(focos, hide_index=True, width="stretch")
+    with dcol2:
+        st.markdown(
+            """
+            <div class="section-card">
+            <b>Uso recomendado</b><br>
+            1. Revisar prioridad alta.<br>
+            2. Validar templo propuesto con liderazgo local.<br>
+            3. Programar acción territorial y responsable.<br>
+            4. Exportar informe para seguimiento.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.download_button(
+            "Descargar informe ejecutivo",
+            informe_ejecutivo_md.encode("utf-8"),
+            "informe_ejecutivo_kennedy.md",
+            "text/markdown",
+        )
 
     if not informe.empty:
         for _, r in informe.iterrows():
@@ -1125,7 +1213,7 @@ with tab_resumen:
             title="Top 10 puestos con mayor crecimiento",
         )
         fig.update_layout(height=420, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     with col2:
         top_neg = puestos.sort_values("VARIACION_ABSOLUTA", ascending=True).head(10)
         fig = px.bar(
@@ -1137,7 +1225,7 @@ with tab_resumen:
             title="Top 10 puestos con mayor caída",
         )
         fig.update_layout(height=420, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     st.markdown("### Desglose de actividades de campaña")
     if not actividades_f.empty and "TIPO_ACTIVIDAD" in actividades_f.columns:
@@ -1154,9 +1242,9 @@ with tab_resumen:
         
         ca1, ca2 = st.columns([1, 2])
         with ca1:
-            st.dataframe(acts_counts, use_container_width=True, hide_index=True)
+            st.dataframe(acts_counts, width="stretch", hide_index=True)
         with ca2:
-            st.plotly_chart(fig_acts, use_container_width=True)
+            st.plotly_chart(fig_acts, width="stretch")
     else:
         st.info("No hay actividades para desglosar con los filtros actuales.")
 
@@ -1177,9 +1265,9 @@ with tab_resumen:
     ce1, ce2 = st.columns([1, 2])
     with ce1:
         st.markdown("**JAL / Concejo 2023**")
-        st.dataframe(elec_data[elec_data["Bloque de análisis"].eq("JAL / Concejo 2023")], hide_index=True, use_container_width=True)
+        st.dataframe(elec_data[elec_data["Bloque de análisis"].eq("JAL / Concejo 2023")], hide_index=True, width="stretch")
         st.markdown("**Cámara / Senado 2026**")
-        st.dataframe(elec_data[elec_data["Bloque de análisis"].eq("Cámara / Senado 2026")], hide_index=True, use_container_width=True)
+        st.dataframe(elec_data[elec_data["Bloque de análisis"].eq("Cámara / Senado 2026")], hide_index=True, width="stretch")
         st.markdown("**Variables operativas del nuevo reporte**")
         st.dataframe(
             pd.DataFrame(
@@ -1189,7 +1277,7 @@ with tab_resumen:
                 }
             ),
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
     with ce2:
         fig_elec = px.bar(
@@ -1201,7 +1289,7 @@ with tab_resumen:
             title="Comparación separada por corporación"
         )
         fig_elec.update_layout(height=350, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
-        st.plotly_chart(fig_elec, use_container_width=True)
+        st.plotly_chart(fig_elec, width="stretch")
 
 with tab_mapa:
     st.subheader("Mapa interactivo territorial")
@@ -1251,7 +1339,7 @@ with tab_mapa:
                     columns=["Campo", "Valor"],
                 ),
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
             act_templo = st.selectbox("Asignar actividad al templo", TEMPLOS_OFICIALES, index=act_index, key="templo_actividad_ajuste")
             if st.button("Guardar ajuste de actividad"):
@@ -1285,7 +1373,7 @@ with tab_mapa:
                     columns=["Campo", "Valor"],
                 ),
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
             mesa_templo = st.selectbox("Asignar mesa al templo", TEMPLOS_OFICIALES, index=mesa_index, key="templo_mesa_ajuste")
             if st.button("Guardar ajuste de mesa"):
@@ -1301,7 +1389,7 @@ with tab_mapa:
             st.rerun()
 
     st.markdown("### Resumen operativo por templo")
-    st.dataframe(resumen_operativo_mapa, hide_index=True, use_container_width=True)
+    st.dataframe(resumen_operativo_mapa, hide_index=True, width="stretch")
 
     asignacion_reporte_mapa = aplicar_ajustes_asignacion(asignacion.copy())
     informe_mapa = generar_informe_territorial(asignacion_reporte_mapa, actividades, mesas)
@@ -1374,12 +1462,12 @@ with tab_asignacion:
         ("Votos 2026", fmt_number(puesto_row.get("VOTOS_2026"), 0)),
         ("Prioridad", puesto_row.get("PRIORIDAD")),
     ]
-    st.dataframe(pd.DataFrame(info_cols, columns=["Campo", "Valor"]), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(info_cols, columns=["Campo", "Valor"]), hide_index=True, width="stretch")
 
     dist_info = pd.DataFrame(
         [{"Templo": templo, "Distancia km": puesto_row.get(col)} for templo, col in DIST_COLS_TEMPLOS.items()]
     )
-    st.dataframe(dist_info, hide_index=True, use_container_width=True)
+    st.dataframe(dist_info, hide_index=True, width="stretch")
 
     templo_nuevo = st.selectbox("Asignar este puesto al templo", TEMPLOS_OFICIALES, index=index_templo)
     col_guardar, col_limpiar = st.columns([1, 3])
@@ -1394,10 +1482,10 @@ with tab_asignacion:
             st.rerun()
 
     st.markdown("### Resumen por templo")
-    st.dataframe(resumen_final, hide_index=True, use_container_width=True)
+    st.dataframe(resumen_final, hide_index=True, width="stretch")
 
     st.markdown("### Puestos asignados por templo")
-    st.dataframe(tabla_templos, hide_index=True, use_container_width=True)
+    st.dataframe(tabla_templos, hide_index=True, width="stretch")
 
     with st.expander("Lectura automática de la asignación", expanded=True):
         templo_menor = resumen_final.sort_values("PUESTOS_ASIGNADOS", ascending=True).iloc[0]
@@ -1437,7 +1525,7 @@ with tab_iglesia:
         "PUESTOS", "ACTIVIDADES_CAMPANA", "MESAS_TRABAJO", "PUESTO_MAYOR_VOTACION",
         "PUESTO_MAYOR_CAIDA", "PUESTO_MAYOR_CRECIMIENTO"
     ]
-    st.dataframe(resumen_iglesia_f[cols_show], use_container_width=True, hide_index=True)
+    st.dataframe(resumen_iglesia_f[cols_show], width="stretch", hide_index=True)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1450,7 +1538,7 @@ with tab_iglesia:
             color="IGLESIA",
         )
         fig.update_layout(height=420, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     with col2:
         fig = go.Figure()
         ri = resumen_iglesia_f.sort_values("VOTOS_2026", ascending=False)
@@ -1464,7 +1552,7 @@ with tab_iglesia:
             plot_bgcolor="white",
             font_color=COLOR_TEXT,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     for iglesia in iglesias["IGLESIA"].tolist():
         sub = puestos[puestos["IGLESIA"].eq(iglesia)].copy()
@@ -1479,7 +1567,7 @@ with tab_iglesia:
                 st.dataframe(
                     sub[["PUESTO", "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "PRIORIDAD", "ACCION_RECOMENDADA"]]
                     .sort_values("VOTOS_2026", ascending=False),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
 
@@ -1498,7 +1586,7 @@ with tab_puesto:
             title="Puestos con mayor crecimiento",
         )
         fig.update_layout(height=560, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     with col2:
         top_drop = puestos_f.sort_values("VARIACION_ABSOLUTA", ascending=True).head(15)
         fig = px.bar(
@@ -1510,19 +1598,21 @@ with tab_puesto:
             title="Puestos con mayor caída",
         )
         fig.update_layout(height=560, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     st.markdown("### Matriz analítica por puesto")
     cols_puesto = [
-        "PUESTO", "IGLESIA", "MIRA_CONCEJO_2023", "JAL_2023", "CAMARA_2026", "SENADO_2026",
+        "PUESTO", "IGLESIA", "IGLESIA_HISTORICA_2026", "TEMPLO_OPERATIVO_ACTUAL", "TEMPLO_PROPUESTO",
+        "CAMBIO_PROPUESTO_TEMPLO", "ROL_ANALITICO", "MIRA_CONCEJO_2023", "JAL_2023", "CAMARA_2026", "SENADO_2026",
         "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL",
         "MESAS_2026_REPORTE", "TESTIGOS_2023_REPORTE", "VOTOS_AFINIDAD_E11_2023",
-        "TEMPLO_REPORTE", "TIENE_MESA_TRABAJO", "PRIORIDAD", "ACCION_RECOMENDADA"
+        "TEMPLO_REPORTE", "TIENE_MESA_TRABAJO", "PUNTAJE_PRIORIDAD", "FACTORES_PRIORIDAD",
+        "PRIORIDAD", "ACCION_RECOMENDADA"
     ]
     cols_puesto = [c for c in cols_puesto if c in puestos_f.columns]
     st.dataframe(
         puestos_f[cols_puesto].sort_values(["PRIORIDAD", "VOTOS_2026"], ascending=[True, False]),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -1531,7 +1621,7 @@ with tab_barrio:
     if resumen_barrio.empty:
         st.info("No hay resumen por barrio o UPZ disponible.")
     else:
-        st.dataframe(resumen_barrio, use_container_width=True, hide_index=True)
+        st.dataframe(resumen_barrio, width="stretch", hide_index=True)
 
     if "UPZ" in puestos.columns and puestos["UPZ"].notna().any() and puestos["UPZ"].astype(str).str.len().gt(0).any():
         upz_summary = puestos.groupby("UPZ", dropna=False).agg(
@@ -1547,7 +1637,7 @@ with tab_barrio:
             orientation="h",
             title="Votos 2026 por UPZ",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.markdown(
             '<div class="warning-box">La base consolidada aún no tiene UPZ asignada. Para activar análisis espacial por UPZ, agregue <b>data/upz_kennedy.geojson</b> o complete la columna UPZ en el Excel consolidado.</div>',
@@ -1556,22 +1646,57 @@ with tab_barrio:
 
 with tab_prioridad:
     st.subheader("Matriz de priorización territorial")
-    st.dataframe(matriz, use_container_width=True, hide_index=True)
+    st.markdown(
+        '<div class="note-box">La priorización combina concentración electoral, variación, presencia comunitaria, mesas de trabajo y distancia logística. El puntaje ayuda a ordenar intervención; no reemplaza la validación política en territorio.</div>',
+        unsafe_allow_html=True,
+    )
+    matriz_show = matriz.copy()
+    if "PUNTAJE_PRIORIDAD" in matriz_show.columns:
+        matriz_show = matriz_show.sort_values(["NIVEL_PRIORIDAD", "PUNTAJE_PRIORIDAD", "VOTOS_2026"], ascending=[True, False, False])
+    st.dataframe(matriz_show, width="stretch", hide_index=True)
 
     prioridad_count = matriz.groupby("NIVEL_PRIORIDAD").size().reset_index(name="PUESTOS")
-    fig = px.bar(
-        prioridad_count,
-        x="NIVEL_PRIORIDAD",
-        y="PUESTOS",
-        title="Distribución de puestos por prioridad",
-        color="NIVEL_PRIORIDAD",
-    )
-    fig.update_layout(height=380, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT, showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
+    pcol1, pcol2 = st.columns(2)
+    with pcol1:
+        fig = px.bar(
+            prioridad_count,
+            x="NIVEL_PRIORIDAD",
+            y="PUESTOS",
+            title="Distribución de puestos por prioridad",
+            color="NIVEL_PRIORIDAD",
+        )
+        fig.update_layout(height=380, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT, showlegend=False)
+        st.plotly_chart(fig, width="stretch")
+    with pcol2:
+        if {"VOTOS_2026", "VARIACION_ABSOLUTA", "PUNTAJE_PRIORIDAD"}.issubset(matriz.columns):
+            fig = px.scatter(
+                matriz,
+                x="VOTOS_2026",
+                y="VARIACION_ABSOLUTA",
+                size="PUNTAJE_PRIORIDAD",
+                color="NIVEL_PRIORIDAD",
+                hover_name="PUESTO",
+                title="Concentración electoral vs variación",
+            )
+            fig.update_layout(height=380, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
+            st.plotly_chart(fig, width="stretch")
+
+    if "ROL_ANALITICO" in matriz.columns:
+        rol_count = matriz.groupby(["ROL_ANALITICO", "NIVEL_PRIORIDAD"]).size().reset_index(name="PUESTOS")
+        fig = px.bar(
+            rol_count,
+            x="ROL_ANALITICO",
+            y="PUESTOS",
+            color="NIVEL_PRIORIDAD",
+            title="Puestos por rol analítico y prioridad",
+        )
+        fig.update_layout(height=390, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
+        st.plotly_chart(fig, width="stretch")
 
 with tab_export:
     st.subheader("Exportables")
     st.markdown("Descargue la base maestra consolidada o tablas específicas para anexos del informe.")
+    informe_ejecutivo_export = generar_informe_ejecutivo_markdown(puestos, resumen_iglesia, matriz, actividades, mesas)
 
     if CONSOLIDADO.exists():
         st.download_button(
@@ -1598,5 +1723,12 @@ with tab_export:
             mime="text/csv",
         )
 
+    st.download_button(
+        "Descargar informe ejecutivo territorial",
+        data=informe_ejecutivo_export.encode("utf-8"),
+        file_name="informe_ejecutivo_territorial_kennedy.md",
+        mime="text/markdown",
+    )
+
     with st.expander("Control de calidad de datos"):
-        st.dataframe(control, use_container_width=True, hide_index=True)
+        st.dataframe(control, width="stretch", hide_index=True)

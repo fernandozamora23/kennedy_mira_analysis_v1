@@ -576,6 +576,44 @@ def calcular_distancias_a_templos(puestos_df, iglesias_df):
     return pd.DataFrame(rows).reindex(columns=cols)
 
 
+def enriquecer_capas_territoriales(puestos, iglesias):
+    asignacion = calcular_distancias_a_templos(puestos, iglesias)
+    cols = [
+        "PUESTO_ID",
+        "TEMPLO_MAS_CERCANO",
+        "TEMPLO_ASIGNADO_PROPUESTO",
+        "DISTANCIA_MINIMA_KM",
+        "OBSERVACION_ASIGNACION",
+    ]
+    out = puestos.merge(asignacion[cols], on="PUESTO_ID", how="left")
+    out["IGLESIA_HISTORICA_2026"] = out["IGLESIA"]
+    out["TEMPLO_OPERATIVO_ACTUAL"] = out["IGLESIA"]
+    out["TEMPLO_PROPUESTO"] = out["TEMPLO_ASIGNADO_PROPUESTO"].where(
+        out["TEMPLO_ASIGNADO_PROPUESTO"].isin(IGLESIAS_COORDENADAS),
+        out["TEMPLO_OPERATIVO_ACTUAL"],
+    )
+    out["CAMBIO_PROPUESTO_TEMPLO"] = np.where(
+        out["TEMPLO_PROPUESTO"].ne(out["IGLESIA_HISTORICA_2026"]),
+        "SI",
+        "NO",
+    )
+    out["NOTA_TEMPLO_PROPUESTO"] = np.where(
+        out["CAMBIO_PROPUESTO_TEMPLO"].eq("SI"),
+        "Asignación sugerida por cercanía territorial; conserva iglesia histórica para análisis electoral.",
+        "La asignación propuesta coincide con la iglesia histórica 2026.",
+    )
+    out["ROL_ANALITICO"] = np.select(
+        [
+            out["VARIACION_ABSOLUTA"].lt(0) & out["VOTOS_2026"].ge(80),
+            out["VARIACION_ABSOLUTA"].ge(0) & out["VOTOS_2026"].ge(80),
+            out["VOTOS_2026"].ge(40),
+        ],
+        ["PUESTO DE RECUPERACION", "PUESTO DE CONSOLIDACION", "ZONA DE OPORTUNIDAD"],
+        default="MONITOREO",
+    )
+    return out
+
+
 def crear_resumen_asignacion(asignacion_df):
     rows = []
     for templo in IGLESIAS_COORDENADAS:
@@ -599,18 +637,59 @@ def crear_resumen_asignacion(asignacion_df):
     return pd.DataFrame(rows)
 
 
-def classify_priority(row):
+def calcular_puntaje_prioridad(row, q_votos_alto, q_votos_medio):
     v26 = row["VOTOS_2026"] if pd.notna(row["VOTOS_2026"]) else 0
     var = row["VARIACION_ABSOLUTA"] if pd.notna(row["VARIACION_ABSOLUTA"]) else 0
     mesas = row["MESAS_TRABAJO_BARRIO"] if pd.notna(row["MESAS_TRABAJO_BARRIO"]) else 0
+    acts = row["ACTIVIDADES_CAMPANA_IGLESIA"] if pd.notna(row.get("ACTIVIDADES_CAMPANA_IGLESIA")) else 0
+    distancia = row["DISTANCIA_MINIMA_KM"] if pd.notna(row.get("DISTANCIA_MINIMA_KM")) else 0
 
-    if v26 >= 100 and var < 0:
+    score = 0
+    razones = []
+
+    if v26 >= q_votos_alto:
+        score += 30
+        razones.append("alta concentración electoral")
+    elif v26 >= q_votos_medio:
+        score += 18
+        razones.append("votación media con potencial")
+
+    if var < -20:
+        score += 30
+        razones.append("caída electoral fuerte")
+    elif var < 0:
+        score += 18
+        razones.append("caída electoral moderada")
+    elif var > 15:
+        score += 8
+        razones.append("crecimiento a consolidar")
+
+    if mesas == 0 and v26 >= q_votos_medio:
+        score += 18
+        razones.append("sin mesa de trabajo asociada")
+    if acts == 0 and v26 >= q_votos_medio:
+        score += 12
+        razones.append("baja presencia de campaña registrada")
+    if distancia and distancia > 3:
+        score += 8
+        razones.append("distancia logística alta al templo propuesto")
+
+    return min(score, 100), "; ".join(razones) if razones else "información insuficiente o baja criticidad"
+
+
+def classify_priority(row, q_votos_alto=100, q_votos_medio=50):
+    v26 = row["VOTOS_2026"] if pd.notna(row["VOTOS_2026"]) else 0
+    var = row["VARIACION_ABSOLUTA"] if pd.notna(row["VARIACION_ABSOLUTA"]) else 0
+    mesas = row["MESAS_TRABAJO_BARRIO"] if pd.notna(row["MESAS_TRABAJO_BARRIO"]) else 0
+    score = row["PUNTAJE_PRIORIDAD"] if pd.notna(row.get("PUNTAJE_PRIORIDAD")) else 0
+
+    if score >= 65 or (v26 >= q_votos_alto and var < 0):
         return "ALTA", "Caída en puesto de alta votación", "Recuperar votación perdida con agenda territorial focalizada."
-    if v26 >= 100 and mesas == 0:
+    if v26 >= q_votos_alto and mesas == 0:
         return "ALTA", "Alta votación sin mesa de trabajo registrada", "Programar mesa de trabajo o visita de seguimiento en el barrio."
     if var < -15:
         return "ALTA", "Caída electoral relevante", "Identificar líderes, causas de pérdida y plan de recuperación."
-    if v26 >= 50 and var >= 0:
+    if score >= 40 or (v26 >= q_votos_medio and var >= 0):
         return "MEDIA", "Crecimiento o base electoral media", "Consolidar mediante contacto con líderes y presencia comunitaria."
     if v26 >= 30:
         return "MEDIA", "Votación media con oportunidad", "Mantener seguimiento y evaluar actividad de bajo costo."
@@ -648,7 +727,14 @@ def main():
     puestos["ACTIVIDADES_CAMPANA_IGLESIA"] = puestos["IGLESIA"].map(act_counts).fillna(0).astype(int)
     puestos["MESAS_TRABAJO_IGLESIA"] = puestos["IGLESIA"].map(mesa_counts).fillna(0).astype(int)
 
-    pri = puestos.apply(classify_priority, axis=1)
+    puestos = enriquecer_capas_territoriales(puestos, iglesias)
+    q_votos_alto = pd.to_numeric(puestos["VOTOS_2026"], errors="coerce").quantile(0.75)
+    q_votos_medio = pd.to_numeric(puestos["VOTOS_2026"], errors="coerce").quantile(0.45)
+    puntajes = puestos.apply(lambda row: calcular_puntaje_prioridad(row, q_votos_alto, q_votos_medio), axis=1)
+    puestos["PUNTAJE_PRIORIDAD"] = [x[0] for x in puntajes]
+    puestos["FACTORES_PRIORIDAD"] = [x[1] for x in puntajes]
+
+    pri = puestos.apply(lambda row: classify_priority(row, q_votos_alto, q_votos_medio), axis=1)
     puestos["PRIORIDAD"] = [x[0] for x in pri]
     puestos["RAZON_PRIORIDAD"] = [x[1] for x in pri]
     puestos["ACCION_RECOMENDADA"] = [x[2] for x in pri]
@@ -678,7 +764,13 @@ def main():
         })
     resumen_iglesia = pd.DataFrame(resumen_iglesia)
 
-    resumen_puesto = puestos[["PUESTO", "IGLESIA", "BARRIO", "UPZ", "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "ACTIVIDADES_CAMPANA_IGLESIA", "MESAS_TRABAJO_BARRIO", "PRIORIDAD", "ACCION_RECOMENDADA"]].copy()
+    resumen_puesto = puestos[[
+        "PUESTO", "IGLESIA", "IGLESIA_HISTORICA_2026", "TEMPLO_OPERATIVO_ACTUAL", "TEMPLO_PROPUESTO",
+        "CAMBIO_PROPUESTO_TEMPLO", "ROL_ANALITICO", "BARRIO", "UPZ", "VOTOS_2026", "VOTOS_2023",
+        "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "ACTIVIDADES_CAMPANA_IGLESIA",
+        "MESAS_TRABAJO_BARRIO", "PUNTAJE_PRIORIDAD", "FACTORES_PRIORIDAD", "PRIORIDAD",
+        "ACCION_RECOMENDADA"
+    ]].copy()
     resumen_puesto = resumen_puesto.rename(columns={"ACTIVIDADES_CAMPANA_IGLESIA": "ACTIVIDADES_CAMPANA"})
 
     resumen_barrio = puestos.groupby(["BARRIO", "IGLESIA", "UPZ"], dropna=False).agg(
@@ -691,13 +783,28 @@ def main():
     resumen_barrio["PRIORIDAD"] = np.where((resumen_barrio["VOTOS_2026"] >= 100) & (resumen_barrio["VARIACION_ABSOLUTA"] < 0), "ALTA", np.where(resumen_barrio["VOTOS_2026"] >= 50, "MEDIA", "BAJA"))
     resumen_barrio["ACCION_RECOMENDADA"] = np.where(resumen_barrio["PRIORIDAD"] == "ALTA", "Plan de recuperación barrial y mesa de seguimiento.", np.where(resumen_barrio["PRIORIDAD"] == "MEDIA", "Consolidar presencia territorial.", "Monitoreo."))
 
-    matriz = puestos[["PUESTO", "IGLESIA", "BARRIO", "UPZ", "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "PRIORIDAD", "RAZON_PRIORIDAD", "ACCION_RECOMENDADA"]].copy()
+    matriz = puestos[[
+        "PUESTO", "IGLESIA", "IGLESIA_HISTORICA_2026", "TEMPLO_OPERATIVO_ACTUAL", "TEMPLO_PROPUESTO",
+        "CAMBIO_PROPUESTO_TEMPLO", "ROL_ANALITICO", "BARRIO", "UPZ", "VOTOS_2026", "VOTOS_2023",
+        "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "PUNTAJE_PRIORIDAD", "FACTORES_PRIORIDAD",
+        "PRIORIDAD", "RAZON_PRIORIDAD", "ACCION_RECOMENDADA"
+    ]].copy()
     matriz["NIVEL_PRIORIDAD"] = matriz["PRIORIDAD"]
     matriz["VARIABLE_CRITICA"] = matriz["RAZON_PRIORIDAD"]
-    matriz["DIAGNOSTICO"] = np.where(matriz["VARIACION_ABSOLUTA"] < 0, "El puesto pierde votación frente a 2023.", "El puesto mantiene o aumenta votación.")
+    matriz["DIAGNOSTICO"] = np.where(
+        matriz["VARIACION_ABSOLUTA"] < 0,
+        "El puesto pierde votación frente a 2023; revisar causa política, logística y territorial.",
+        "El puesto mantiene o aumenta votación; consolidar contacto, testigos y presencia comunitaria.",
+    )
     matriz["TEMPORALIDAD"] = np.where(matriz["NIVEL_PRIORIDAD"] == "ALTA", "0-60 días", np.where(matriz["NIVEL_PRIORIDAD"] == "MEDIA", "60-120 días", "Seguimiento trimestral"))
-    matriz["RESPONSABLE_SUGERIDO"] = matriz["IGLESIA"]
-    matriz = matriz[["NIVEL_PRIORIDAD", "PUESTO", "IGLESIA", "BARRIO", "UPZ", "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "VARIABLE_CRITICA", "DIAGNOSTICO", "ACCION_RECOMENDADA", "TEMPORALIDAD", "RESPONSABLE_SUGERIDO"]]
+    matriz["RESPONSABLE_SUGERIDO"] = matriz["TEMPLO_PROPUESTO"]
+    matriz = matriz[[
+        "NIVEL_PRIORIDAD", "PUNTAJE_PRIORIDAD", "ROL_ANALITICO", "PUESTO", "IGLESIA",
+        "IGLESIA_HISTORICA_2026", "TEMPLO_OPERATIVO_ACTUAL", "TEMPLO_PROPUESTO",
+        "CAMBIO_PROPUESTO_TEMPLO", "BARRIO", "UPZ", "VOTOS_2026", "VOTOS_2023",
+        "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "VARIABLE_CRITICA", "FACTORES_PRIORIDAD",
+        "DIAGNOSTICO", "ACCION_RECOMENDADA", "TEMPORALIDAD", "RESPONSABLE_SUGERIDO"
+    ]]
 
     asignacion_puestos = calcular_distancias_a_templos(puestos, iglesias)
     resumen_asignacion_templos = crear_resumen_asignacion(asignacion_puestos)
@@ -713,6 +820,9 @@ def main():
     afinidad_2023_reporte = pd.to_numeric(puestos.get("VOTOS_AFINIDAD_E11_2023", pd.Series(dtype=float)), errors="coerce").sum()
     mira_prop_2023_reporte = pd.to_numeric(puestos.get("VOTOS_MIRA_2023_PROP_LISTA", pd.Series(dtype=float)), errors="coerce").sum()
     puestos_reporte_match = puestos.get("MATCH_PUESTOS_LOCALIDAD_2026", pd.Series("", index=puestos.index)).ne("SIN MATCH").sum()
+    puestos_alta = int(puestos["PRIORIDAD"].eq("ALTA").sum())
+    puestos_cambio_templo = int(puestos["CAMBIO_PROPUESTO_TEMPLO"].eq("SI").sum())
+    puntaje_promedio = pd.to_numeric(puestos["PUNTAJE_PRIORIDAD"], errors="coerce").mean()
     resumen_general = pd.DataFrame([
         {"INDICADOR": "Total Kennedy votos promedio 2026", "VALOR": total_2026, "NOTA": "Fila total oficial de Hoja 5."},
         {"INDICADOR": "Total Kennedy votos promedio 2023", "VALOR": total_2023, "NOTA": "Fila total oficial de Hoja 5."},
@@ -730,6 +840,9 @@ def main():
         {"INDICADOR": "Volanteos confirmados Kennedy", "VALOR": volanteos_count, "NOTA": "Agenda Volanteo - v1 con Confirmada = Sí."},
         {"INDICADOR": "Mesas de trabajo consolidadas", "VALOR": len(mesas), "NOTA": "Reporte Kennedy Bogotá Tecnología." if not mesas_tecnologia.empty else "Bases de campaña y gestión."},
         {"INDICADOR": "Puestos cruzados con reporte localidad 2026", "VALOR": puestos_reporte_match, "NOTA": "Cruce contra Puestos Localidad de Kennedy 2026."},
+        {"INDICADOR": "Puestos prioridad alta", "VALOR": puestos_alta, "NOTA": "Matriz con puntaje técnico de concentración, variación, presencia y logística."},
+        {"INDICADOR": "Puestos con cambio de templo sugerido", "VALOR": puestos_cambio_templo, "NOTA": "Diferencia entre iglesia histórica 2026 y templo propuesto por cercanía."},
+        {"INDICADOR": "Puntaje promedio de prioridad", "VALOR": puntaje_promedio, "NOTA": "Escala 0-100 para ordenar intervención territorial."},
         {"INDICADOR": "Mesas 2026 reporte localidad", "VALOR": mesas_2026_reporte, "NOTA": "Suma de Mesas 2026 del reporte de puestos."},
         {"INDICADOR": "Testigos 2023 reporte localidad", "VALOR": testigos_2023_reporte, "NOTA": "Suma de Testigos 2023 del reporte de puestos."},
         {"INDICADOR": "Votos MIRA 2023 proporción lista reporte", "VALOR": mira_prop_2023_reporte, "NOTA": "Suma del campo Votos MIRA 2023 + Proporción a lista."},
@@ -738,11 +851,11 @@ def main():
 
     informe = pd.DataFrame([
         {"SECCION": "Resumen general", "TEXTO": f"Kennedy registró {total_2026:,.1f} votos promedio en 2026 frente a {total_2023:,.1f} en 2023, para una variación de {total_2026-total_2023:,.1f} votos ({(total_2026-total_2023)/total_2023:.2%})."},
-        {"SECCION": "Hallazgos principales", "TEXTO": "El tablero permite separar resultado general Kennedy y rendimiento por iglesia, evitando confundir totales filtrados con totales oficiales."},
+        {"SECCION": "Hallazgos principales", "TEXTO": f"El tablero identifica {puestos_alta:,.0f} puestos de prioridad alta y {puestos_cambio_templo:,.0f} puestos con cambio operativo de templo sugerido, manteniendo separada la iglesia histórica 2026 del templo propuesto para operación territorial."},
         {"SECCION": "Lectura JAL y Concejo 2023", "TEXTO": f"La base 2023 separa JAL ({total_jal_2023:,.1f}) y Concejo ({total_concejo_2023:,.1f}), lo que permite distinguir comportamiento local y voto de corporación distrital."},
         {"SECCION": "Lectura Cámara y Senado 2026", "TEXTO": f"La base 2026 separa Cámara ({total_camara_2026:,.1f}) y Senado ({total_senado_2026:,.1f}), permitiendo evaluar rendimiento legislativo por puesto e iglesia."},
         {"SECCION": "Reporte de puestos localidad 2026", "TEXTO": f"Se cruzaron {puestos_reporte_match:,.0f} puestos con el archivo Puestos Localidad de Kennedy 2026, incorporando mesas 2026, testigos 2023, afinidad E-11 y templo reportado como variables operativas complementarias."},
-        {"SECCION": "Recomendaciones estratégicas", "TEXTO": "Priorizar puestos de alta votación con caída, consolidar iglesias con saldo positivo y completar capa UPZ para análisis espacial."},
+        {"SECCION": "Recomendaciones estratégicas", "TEXTO": "Priorizar puestos de alta votación con caída, consolidar iglesias con saldo positivo, validar en territorio los cambios de templo sugeridos y completar barrio/UPZ para pasar de lectura por punto a lectura territorial fina."},
     ])
 
     control = pd.DataFrame([
