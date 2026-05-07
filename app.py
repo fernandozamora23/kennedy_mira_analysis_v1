@@ -13,7 +13,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import folium
-from folium.plugins import HeatMap, Fullscreen, MiniMap
+from folium.plugins import HeatMap, Fullscreen, MiniMap, MarkerCluster
 from streamlit_folium import st_folium
 
 # ============================================================
@@ -581,43 +581,45 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
         ).add_to(templos_layer)
     templos_layer.add_to(m)
 
-    puestos_layer = folium.FeatureGroup(name="Puestos por templo asignado", show=True)
+    puestos_layer = MarkerCluster(name="Puestos por templo asignado", show=True)
     lineas_layer = folium.FeatureGroup(name="Líneas puesto-templo", show=True)
     for _, r in asignacion_df.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         templo = r.get("TEMPLO_ASIGNADO_FINAL")
         color = COLORES_TEMPLOS.get(templo, "#64748B")
         distancia = pd.to_numeric(r.get("DISTANCIA_ASIGNADA_KM"), errors="coerce")
+        num = r.get("NUM_PUESTO", "")
         popup = f"""
-        <div style="font-family:Arial; width:330px;">
-        <h4 style="margin-bottom:6px;">{safe_html(r.get('PUESTO'))}</h4>
+        <div style="font-family:Arial; width:330px; color:#0F172A;">
+        <h4 style="margin-bottom:6px; font-weight:800;">#{num} - {safe_html(r.get('PUESTO'))}</h4>
         <b>Dirección:</b> {safe_html(r.get('DIRECCION'))}<br>
         <b>Barrio:</b> {safe_html(r.get('BARRIO'))}<br>
         <b>UPZ:</b> {safe_html(r.get('UPZ'))}<br>
         <b>Iglesia actual:</b> {safe_html(r.get('IGLESIA_ACTUAL'))}<br>
-        <b>Templo más cercano:</b> {safe_html(r.get('TEMPLO_MAS_CERCANO'))}<br>
         <b>Templo asignado:</b> {safe_html(templo)}<br>
-        <b>Distancia mínima:</b> {fmt_number(distancia, 2)} km<br>
+        <b>Distancia:</b> {fmt_number(distancia, 2)} km<br>
         <b>Votos 2026:</b> {fmt_number(r.get('VOTOS_2026'), 0)}<br>
         <b>Prioridad:</b> {safe_html(r.get('PRIORIDAD'))}
         </div>
         """
-        folium.CircleMarker(
+        
+        icon_html = f"""
+        <div style="background-color: {color}; color: white; border-radius: 50%; width: 22px; height: 22px; display: flex; justify-content: center; align-items: center; font-size: 11px; font-weight: 800; border: 2px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.3);">
+        {num}
+        </div>
+        """
+
+        folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            radius=6,
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.78,
-            weight=1.3,
-            tooltip=f"{r.get('PUESTO')} | {safe_html(r.get('BARRIO'))} | {safe_html(templo)} | {fmt_number(distancia, 2)} km | {fmt_number(r.get('VOTOS_2026'), 0)} votos",
+            icon=folium.DivIcon(html=icon_html),
+            tooltip=f"#{num} - {r.get('PUESTO')} | {safe_html(templo)}",
             popup=folium.Popup(popup, max_width=380),
         ).add_to(puestos_layer)
         if templo in templo_coords:
             folium.PolyLine(
                 locations=[[r["LATITUD"], r["LONGITUD"]], list(templo_coords[templo])],
                 color=color,
-                weight=1,
-                opacity=0.28,
+                weight=1.5,
+                opacity=0.3,
             ).add_to(lineas_layer)
     lineas_layer.add_to(m)
     puestos_layer.add_to(m)
@@ -1534,8 +1536,18 @@ with tab_asignacion:
     with a5:
         metric_card("Base Carvajal", fmt_number(resumen_documental.loc[resumen_documental["TEMPLO"].eq("CARVAJAL"), "PUESTOS"].iloc[0] if not resumen_documental.empty else 0, 0))
 
+    asignacion_final = asignacion_final.copy().reset_index(drop=True)
+    asignacion_final["NUM_PUESTO"] = asignacion_final.index + 1
+
     mapa_asignacion = crear_mapa_asignacion(asignacion_final, iglesias)
-    st_folium(mapa_asignacion, width=None, height=720)
+    
+    mcol1, mcol2 = st.columns([3, 1])
+    with mcol1:
+        st_folium(mapa_asignacion, width=None, height=720)
+    with mcol2:
+        st.markdown("<div style='font-weight:800; font-size:1.1rem; margin-bottom:0.8rem; color:#0F172A;'>Leyenda técnica de puestos</div>", unsafe_allow_html=True)
+        df_leyenda = asignacion_final.dropna(subset=["LATITUD", "LONGITUD"])[["NUM_PUESTO", "PUESTO"]].rename(columns={"NUM_PUESTO": "#", "PUESTO": "Nombre del Puesto"})
+        st.dataframe(df_leyenda, hide_index=True, height=650, use_container_width=True)
 
     with st.expander("Ajustar templo de un puesto de votación", expanded=False):
         st.caption("Ajuste definitivo para modificar la asignación. No modifica el Excel maestro directamente pero sí los reportes exportables.")
