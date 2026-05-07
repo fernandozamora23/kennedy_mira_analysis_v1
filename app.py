@@ -1319,6 +1319,47 @@ with tab_mapa:
     mapa = crear_mapa(puestos_f, iglesias, actividades_f, mesas_f)
     st_folium(mapa, width=None, height=720)
 
+    with st.expander("Ajustar templo de una mesa de trabajo", expanded=False):
+        st.caption("Ajuste temporal para discusión territorial. No modifica el Excel maestro.")
+        if mesas.empty:
+            st.info("No hay mesas disponibles para ajustar.")
+        else:
+            mesa_tmp = mesas.copy()
+            mesa_tmp["LABEL"] = mesa_tmp.apply(
+                lambda r: f"{int(r['MESA_ID'])} · {r.get('NOMBRE_GESTION', r.get('TEMA',''))} · {r.get('BARRIO','SIN BARRIO')} · {r.get('IGLESIA','')}",
+                axis=1,
+            )
+            mesa_label = st.selectbox("Mesa de trabajo", mesa_tmp["LABEL"].tolist(), key="sel_mesa_ajuste_compacto")
+            mesa_row = mesa_tmp[mesa_tmp["LABEL"].eq(mesa_label)].iloc[0]
+            mesa_index = TEMPLOS_OFICIALES.index(mesa_row["IGLESIA"]) if mesa_row.get("IGLESIA") in TEMPLOS_OFICIALES else 0
+
+            m1, m2 = st.columns([2, 1])
+            with m1:
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            ("Tema", mesa_row.get("TEMA")),
+                            ("Barrio", mesa_row.get("BARRIO")),
+                            ("Templo original", mesa_row.get("IGLESIA_ORIGINAL")),
+                            ("Templo actual", mesa_row.get("IGLESIA")),
+                            ("Líder", mesa_row.get("LIDER")),
+                            ("Estado", mesa_row.get("ESTADO")),
+                        ],
+                        columns=["Campo", "Valor"],
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                )
+            with m2:
+                mesa_templo = st.selectbox("Templo asignado", TEMPLOS_OFICIALES, index=mesa_index, key="templo_mesa_ajuste_compacto")
+                if st.button("Guardar ajuste de mesa"):
+                    st.session_state.setdefault("ajustes_mesas", {})[mesa_row["MESA_ID"]] = mesa_templo
+                    st.success("Ajuste temporal de mesa guardado.")
+                    st.rerun()
+                if st.button("Limpiar ajustes de mesas"):
+                    st.session_state["ajustes_mesas"] = {}
+                    st.rerun()
+
     st.markdown("### Resumen operativo por templo")
     st.dataframe(resumen_operativo_mapa, hide_index=True, width="stretch")
 
