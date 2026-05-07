@@ -65,9 +65,12 @@ DIST_COLS_TEMPLOS = {
 st.markdown(
     """
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
     .stApp {
         background: #F8FAFC;
         color: #0F172A;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
     .main .block-container {
@@ -94,21 +97,29 @@ st.markdown(
     }
 
     .section-card {
-        background: #FFFFFF;
-        border: 1px solid #E2E8F0;
+        background: rgba(255, 255, 255, 0.9);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(226, 232, 240, 0.8);
         border-radius: 16px;
-        padding: 1.2rem 1.35rem;
-        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
-        margin-bottom: 1rem;
+        padding: 1.5rem 1.75rem;
+        box-shadow: 0 8px 30px rgba(15, 23, 42, 0.04);
+        margin-bottom: 1.5rem;
     }
 
     .metric-card {
-        background: #FFFFFF;
-        border: 1px solid #E2E8F0;
-        border-radius: 12px;
-        padding: 0.85rem 1rem;
-        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
-        min-height: 96px;
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(226, 232, 240, 0.9);
+        border-radius: 16px;
+        padding: 1.25rem 1.5rem;
+        box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06);
+        min-height: 110px;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    
+    .metric-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(15, 23, 42, 0.08);
     }
 
     .metric-label {
@@ -181,8 +192,9 @@ st.markdown(
     }
 
     div[data-testid="stDataFrame"] {
-        background: #FFFFFF;
+        background: rgba(255, 255, 255, 0.9);
         border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
     }
 
     div[data-testid="stExpander"] {
@@ -616,8 +628,9 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
             folium.PolyLine(
                 locations=[[r["LATITUD"], r["LONGITUD"]], list(templo_coords[templo])],
                 color=color,
-                weight=1,
-                opacity=0.28,
+                weight=1.5,
+                opacity=0.2,
+                dash_array="5, 8",
             ).add_to(lineas_layer)
     lineas_layer.add_to(m)
     puestos_layer.add_to(m)
@@ -759,7 +772,7 @@ def get_indicador(df, indicador, default=np.nan):
     return row.iloc[0]["VALOR"]
 
 
-def metric_card(label, value, delta=None, positive=True):
+def metric_card(label, value, delta=None, positive=True, icon="📍"):
     delta_html = ""
     if delta is not None:
         cls = "metric-delta-positive" if positive else "metric-delta-negative"
@@ -768,8 +781,13 @@ def metric_card(label, value, delta=None, positive=True):
     st.markdown(
         f"""
         <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                <div>
+                    <div class="metric-label">{label}</div>
+                    <div class="metric-value">{value}</div>
+                </div>
+                <div style="font-size: 1.5rem; opacity: 0.5;">{icon}</div>
+            </div>
             {delta_html}
         </div>
         """,
@@ -839,14 +857,14 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     heat_data = valid_heat[["LATITUD", "LONGITUD", "VOTOS_2026"]].values.tolist()
     if heat_data:
         heat_layer = folium.FeatureGroup(name="Calor votos 2026", show=False)
-        HeatMap(heat_data, radius=28, blur=18, min_opacity=0.25, max_val=300).add_to(heat_layer)
+        HeatMap(heat_data, radius=28, blur=18, min_opacity=0.25, max_val=300, gradient={0.2: '#440154', 0.4: '#3b528b', 0.6: '#21918c', 0.8: '#5ec962', 1.0: '#fde725'}).add_to(heat_layer)
         heat_layer.add_to(m)
         
         heat_legend_html = """
-        <div style="position: fixed; bottom: 35px; left: 35px; z-index:9999; background:white; padding:12px 14px; border:1px solid #CBD5E1; border-radius:10px; box-shadow:0 3px 12px rgba(0,0,0,.12); font-size:12px; width: 175px;">
-        <b style="color:#0F172A;">Intensidad de Votos 2026</b><br>
-        <div style="background: linear-gradient(to right, blue, cyan, lime, yellow, red); width: 100%; height: 10px; border-radius: 5px; margin: 8px 0;"></div>
-        <div style="display: flex; justify-content: space-between; color:#334155; font-size:10.5px;">
+        <div style="position: fixed; bottom: 35px; left: 35px; z-index:9999; background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(8px); padding:12px 14px; border:1px solid #E2E8F0; border-radius:12px; box-shadow:0 8px 30px rgba(15, 23, 42, 0.08); font-size:12px; width: 185px;">
+        <b style="color:#0F172A; font-family:'Inter', sans-serif;">Intensidad de Votos 2026</b><br>
+        <div style="background: linear-gradient(to right, #440154, #3b528b, #21918c, #5ec962, #fde725); width: 100%; height: 12px; border-radius: 6px; margin: 10px 0;"></div>
+        <div style="display: flex; justify-content: space-between; color:#475569; font-size:10.5px; font-weight:600; font-family:'Inter', sans-serif;">
             <span>Menos (Azul)<br>0 votos</span>
             <span style="text-align: right;">Más (Rojo)<br>300+ votos</span>
         </div>
@@ -855,41 +873,42 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         m.get_root().html.add_child(folium.Element(heat_legend_html))
 
     # Puestos
-    puestos_layer = folium.FeatureGroup(name="Puestos de votación fijos", show=True)
+    puestos_layer = MarkerCluster(name="Puestos de votación fijos", show=True)
     for _, r in puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         iglesia = r.get("IGLESIA", "")
         color = COLORES_TEMPLOS.get(iglesia, "#64748B")
+        num = r.get("NUM_PUESTO", "")
         puesto = safe_html(r.get("PUESTO", ""))
         iglesia = safe_html(r.get("IGLESIA", ""))
         barrio = safe_html(r.get("BARRIO", ""))
         upz = safe_html(r.get("UPZ", ""))
         accion = safe_html(r.get("ACCION_RECOMENDADA", ""))
         popup = f"""
-        <div style="font-family:Arial; width:330px;">
-        <h4 style="margin-bottom:6px;">{puesto}</h4>
-        <b>Iglesia:</b> {iglesia}<br>
-        <b>Barrio:</b> {barrio}<br>
-        <b>UPZ:</b> {upz}<br>
-        <b>Votos 2026:</b> {fmt_number(r.get('VOTOS_2026'),0)}<br>
-        <b>Votos 2023:</b> {fmt_number(r.get('VOTOS_2023'),0)}<br>
-        <b>Variación:</b> {fmt_number(r.get('VARIACION_ABSOLUTA'),0)} ({fmt_pct(r.get('VARIACION_PORCENTUAL'))})<br>
-        <b>Actividades:</b> {fmt_number(r.get('ACTIVIDADES_CAMPANA'),0)}<br>
-        <b>Mesas:</b> {fmt_number(r.get('MESAS_TRABAJO_BARRIO'),0)}<br>
-        <b>Prioridad:</b> {safe_html(r.get('PRIORIDAD',''))}<br>
-        <b>Acción:</b> {accion}<br>
+        <div style="font-family:'Inter', sans-serif; width:340px; color:#0F172A;">
+        <h4 style="margin-bottom:12px; font-weight:800; border-bottom: 1px solid #E2E8F0; padding-bottom:8px;">#{num} - {puesto}</h4>
+        <table style="width:100%; border-collapse: collapse; font-size: 12.5px;">
+            <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600; color:#475569;">Iglesia</td><td style="padding:6px 8px; font-weight:700;">{iglesia}</td></tr>
+            <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Barrio (UPZ)</td><td style="padding:6px 8px;">{barrio} ({upz})</td></tr>
+            <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600; color:#475569;">Votos 2026</td><td style="padding:6px 8px; font-weight:800; color:#2563EB;">{fmt_number(r.get('VOTOS_2026'),0)}</td></tr>
+            <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Variación</td><td style="padding:6px 8px;">{fmt_number(r.get('VARIACION_ABSOLUTA'),0)} ({fmt_pct(r.get('VARIACION_PORCENTUAL'))})</td></tr>
+            <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600; color:#475569;">Actividades</td><td style="padding:6px 8px;">{fmt_number(r.get('ACTIVIDADES_CAMPANA'),0)}</td></tr>
+            <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Mesas de trabajo</td><td style="padding:6px 8px;">{fmt_number(r.get('MESAS_TRABAJO_BARRIO'),0)}</td></tr>
+            <tr style="background:#FEF2F2;"><td style="padding:6px 8px; font-weight:600; color:#991B1B;">Prioridad</td><td style="padding:6px 8px; font-weight:700; color:#991B1B;">{safe_html(r.get('PRIORIDAD',''))}</td></tr>
+        </table>
         </div>
         """
-        radius = max(5, min(17, float(r.get("VOTOS_2026", 0) or 0) / 14))
-        folium.CircleMarker(
+        
+        icon_html = f"""
+        <div style="background-color: {color}; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; justify-content: center; align-items: center; font-size: 11.5px; font-weight: 800; border: 2.5px solid white; box-shadow: 0 0 10px {color}80, 0 3px 6px rgba(0,0,0,0.16);">
+        {num}
+        </div>
+        """
+
+        folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            radius=radius,
+            icon=folium.DivIcon(html=icon_html),
             popup=folium.Popup(popup, max_width=380),
-            tooltip=f"{r.get('PUESTO','')} | {r.get('IGLESIA','')} | {fmt_number(r.get('VOTOS_2026'),0)}",
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.72,
-            weight=1.2,
+            tooltip=f"#{num} - {r.get('PUESTO','')} | {fmt_number(r.get('VOTOS_2026'),0)} votos",
         ).add_to(puestos_layer)
     puestos_layer.add_to(m)
 
@@ -1440,17 +1459,27 @@ with tab_mapa:
     resumen_operativo_mapa = crear_resumen_operativo_por_templo(acts_mapa, mesas_mapa)
     map_a1, map_a2, map_a3, map_a4 = st.columns(4)
     with map_a1:
-        metric_card("Puestos visibles", fmt_number(len(puestos_mapa), 0))
+        metric_card("Puestos visibles", fmt_number(len(puestos_mapa), 0), icon="📍")
     with map_a2:
-        metric_card("Actividades visibles", fmt_number(len(acts_mapa), 0))
+        metric_card("Actividades visibles", fmt_number(len(acts_mapa), 0), icon="📅")
     with map_a3:
-        metric_card("Mesas visibles", fmt_number(len(mesas_mapa), 0))
+        metric_card("Mesas visibles", fmt_number(len(mesas_mapa), 0), icon="👥")
     with map_a4:
         ajustes_operativos = len(st.session_state.get("ajustes_actividades", {})) + len(st.session_state.get("ajustes_mesas", {}))
-        metric_card("Ajustes operativos", fmt_number(ajustes_operativos, 0))
+        metric_card("Ajustes operativos", fmt_number(ajustes_operativos, 0), icon="⚙️")
+
+    puestos_mapa = puestos_mapa.reset_index(drop=True)
+    puestos_mapa["NUM_PUESTO"] = puestos_mapa.index + 1
 
     mapa = crear_mapa(puestos_mapa, iglesias_mapa, acts_mapa, mesas_mapa)
-    st_folium(mapa, width=None, height=720)
+    
+    mcol1, mcol2 = st.columns([3, 1])
+    with mcol1:
+        st_folium(mapa, width=None, height=720)
+    with mcol2:
+        st.markdown("<div style='font-family:Inter, sans-serif; font-weight:800; font-size:1.15rem; margin-bottom:1rem; color:#0F172A;'>Relación de Puestos</div>", unsafe_allow_html=True)
+        df_leyenda = puestos_mapa.dropna(subset=["LATITUD", "LONGITUD"])[["NUM_PUESTO", "PUESTO"]].rename(columns={"NUM_PUESTO": "#", "PUESTO": "Nombre del Puesto"})
+        st.dataframe(df_leyenda, hide_index=True, height=650, use_container_width=True)
 
     with st.expander("Ajustar templo de una mesa de trabajo", expanded=False):
         st.caption("Ajuste definitivo para modificar la asignación. No modifica el Excel maestro directamente pero sí los reportes exportables.")
