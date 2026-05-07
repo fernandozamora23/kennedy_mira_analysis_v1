@@ -843,7 +843,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         heat_layer.add_to(m)
         
         heat_legend_html = """
-        <div style="position: fixed; top: 120px; right: 35px; z-index:9999; background:white; padding:12px 14px; border:1px solid #CBD5E1; border-radius:10px; box-shadow:0 3px 12px rgba(0,0,0,.12); font-size:12px; width: 175px;">
+        <div style="position: fixed; bottom: 35px; left: 35px; z-index:9999; background:white; padding:12px 14px; border:1px solid #CBD5E1; border-radius:10px; box-shadow:0 3px 12px rgba(0,0,0,.12); font-size:12px; width: 175px;">
         <b style="color:#0F172A;">Intensidad de Votos 2026</b><br>
         <div style="background: linear-gradient(to right, blue, cyan, lime, yellow, red); width: 100%; height: 10px; border-radius: 5px; margin: 8px 0;"></div>
         <div style="display: flex; justify-content: space-between; color:#334155; font-size:10.5px;">
@@ -855,19 +855,18 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         m.get_root().html.add_child(folium.Element(heat_legend_html))
 
     # Puestos
-    puestos_layer = MarkerCluster(name="Puestos de votación fijos", show=True)
+    puestos_layer = folium.FeatureGroup(name="Puestos de votación fijos", show=True)
     for _, r in puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         iglesia = r.get("IGLESIA", "")
         color = COLORES_TEMPLOS.get(iglesia, "#64748B")
-        num = r.get("NUM_PUESTO", "")
         puesto = safe_html(r.get("PUESTO", ""))
         iglesia = safe_html(r.get("IGLESIA", ""))
         barrio = safe_html(r.get("BARRIO", ""))
         upz = safe_html(r.get("UPZ", ""))
         accion = safe_html(r.get("ACCION_RECOMENDADA", ""))
         popup = f"""
-        <div style="font-family:Arial; width:330px; color:#0F172A;">
-        <h4 style="margin-bottom:6px; font-weight:800;">#{num} - {puesto}</h4>
+        <div style="font-family:Arial; width:330px;">
+        <h4 style="margin-bottom:6px;">{puesto}</h4>
         <b>Iglesia:</b> {iglesia}<br>
         <b>Barrio:</b> {barrio}<br>
         <b>UPZ:</b> {upz}<br>
@@ -880,18 +879,17 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         <b>Acción:</b> {accion}<br>
         </div>
         """
-        
-        icon_html = f"""
-        <div style="background-color: {color}; color: white; border-radius: 50%; width: 22px; height: 22px; display: flex; justify-content: center; align-items: center; font-size: 11px; font-weight: 800; border: 2px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.3);">
-        {num}
-        </div>
-        """
-
-        folium.Marker(
+        radius = max(5, min(17, float(r.get("VOTOS_2026", 0) or 0) / 14))
+        folium.CircleMarker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            icon=folium.DivIcon(html=icon_html),
+            radius=radius,
             popup=folium.Popup(popup, max_width=380),
-            tooltip=f"#{num} - {r.get('PUESTO','')} | {r.get('IGLESIA','')} | {fmt_number(r.get('VOTOS_2026'),0)} votos",
+            tooltip=f"{r.get('PUESTO','')} | {r.get('IGLESIA','')} | {fmt_number(r.get('VOTOS_2026'),0)}",
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.72,
+            weight=1.2,
         ).add_to(puestos_layer)
     puestos_layer.add_to(m)
 
@@ -1451,18 +1449,8 @@ with tab_mapa:
         ajustes_operativos = len(st.session_state.get("ajustes_actividades", {})) + len(st.session_state.get("ajustes_mesas", {}))
         metric_card("Ajustes operativos", fmt_number(ajustes_operativos, 0))
 
-    puestos_mapa = puestos_mapa.reset_index(drop=True)
-    puestos_mapa["NUM_PUESTO"] = puestos_mapa.index + 1
-
     mapa = crear_mapa(puestos_mapa, iglesias_mapa, acts_mapa, mesas_mapa)
-    
-    mcol1, mcol2 = st.columns([3, 1])
-    with mcol1:
-        st_folium(mapa, width=None, height=720)
-    with mcol2:
-        st.markdown("<div style='font-weight:800; font-size:1.1rem; margin-bottom:0.8rem; color:#0F172A;'>Relación de Puestos de Votación</div>", unsafe_allow_html=True)
-        df_leyenda = puestos_mapa.dropna(subset=["LATITUD", "LONGITUD"])[["NUM_PUESTO", "PUESTO"]].rename(columns={"NUM_PUESTO": "#", "PUESTO": "Nombre del Puesto"})
-        st.dataframe(df_leyenda, hide_index=True, height=650, use_container_width=True)
+    st_folium(mapa, width=None, height=720)
 
     with st.expander("Ajustar templo de una mesa de trabajo", expanded=False):
         st.caption("Ajuste definitivo para modificar la asignación. No modifica el Excel maestro directamente pero sí los reportes exportables.")
