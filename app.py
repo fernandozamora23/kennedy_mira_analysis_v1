@@ -356,6 +356,32 @@ def geojson_bounds(geojson_obj):
     return [[min(lats), min(lons)], [max(lats), max(lons)]]
 
 
+def agregar_contorno_localidades(mapa):
+    localidades_gj = cargar_geojson(LOCALIDADES_GEOJSON)
+    if not localidades_gj:
+        return False
+
+    def style_localidad(feature):
+        nombre = str((feature.get("properties") or {}).get("LocNombre", "")).strip().upper()
+        is_kennedy = nombre == "KENNEDY"
+        return {
+            "fillColor": "#FFFFFF" if is_kennedy else "#94A3B8",
+            "color": "#0F172A" if is_kennedy else "#64748B",
+            "weight": 2.2 if is_kennedy else 0.9,
+            "fillOpacity": 0.03 if is_kennedy else 0.08,
+            "dashArray": None if is_kennedy else "4 4",
+        }
+
+    folium.GeoJson(
+        localidades_gj,
+        name="Contorno localidades Bogotá",
+        style_function=style_localidad,
+        tooltip=folium.GeoJsonTooltip(fields=["LocNombre"], aliases=["Localidad:"], sticky=True),
+        show=True,
+    ).add_to(mapa)
+    return True
+
+
 def haversine_km(lat1, lon1, lat2, lon2):
     if pd.isna(lat1) or pd.isna(lon1) or pd.isna(lat2) or pd.isna(lon2):
         return np.nan
@@ -516,6 +542,7 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
     m = folium.Map(location=KENNEDY_CENTER, zoom_start=13, tiles="CartoDB positron", control_scale=True)
     Fullscreen(position="topleft").add_to(m)
     MiniMap(toggle_display=True, position="bottomleft").add_to(m)
+    agregar_contorno_localidades(m)
 
     templos = iglesias_df[iglesias_df["IGLESIA"].isin(TEMPLOS_OFICIALES)].dropna(subset=["LATITUD", "LONGITUD"]).copy()
     templo_coords = {r["IGLESIA"]: (r["LATITUD"], r["LONGITUD"]) for _, r in templos.iterrows()}
@@ -751,26 +778,9 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     m = folium.Map(location=KENNEDY_CENTER, zoom_start=13, tiles="CartoDB positron", control_scale=True)
     Fullscreen(position="topleft").add_to(m)
     MiniMap(toggle_display=True, position="bottomleft").add_to(m)
-
     localidades_gj = cargar_geojson(LOCALIDADES_GEOJSON)
     if localidades_gj:
-        def style_localidad(feature):
-            nombre = str((feature.get("properties") or {}).get("LocNombre", "")).strip().upper()
-            is_kennedy = nombre == "KENNEDY"
-            return {
-                "fillColor": "#F8FAFC" if is_kennedy else "#94A3B8",
-                "color": "#0F172A" if is_kennedy else "#CBD5E1",
-                "weight": 2.0 if is_kennedy else 0.7,
-                "fillOpacity": 0.02 if is_kennedy else 0.14,
-            }
-
-        folium.GeoJson(
-            localidades_gj,
-            name="Contexto localidades Bogotá",
-            style_function=style_localidad,
-            tooltip=folium.GeoJsonTooltip(fields=["LocNombre"], aliases=["Localidad:"], sticky=True),
-            show=False,
-        ).add_to(m)
+        agregar_contorno_localidades(m)
 
     upz_gj = cargar_geojson(UPZ_GEOJSON)
     if upz_gj:
