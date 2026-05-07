@@ -293,7 +293,7 @@ if "ajustes_cargados" not in st.session_state:
 # ============================================================
 
 @st.cache_data
-def cargar_datos(path: Path):
+def cargar_datos(path: Path, mtime: float = 0):
     if not path.exists():
         return None
 
@@ -644,6 +644,13 @@ def exportar_asignacion_excel(asignacion_df, resumen_df, tabla_df):
     return output.getvalue()
 
 
+def to_excel_bytes(df, sheet_name="Hoja1"):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name=sheet_name, index=False)
+    return output.getvalue()
+
+
 def generar_informe_territorial(asignacion_df, actividades_df, mesas_df):
     resumen_puestos = crear_resumen_asignacion(asignacion_df)
     resumen_operativo = crear_resumen_operativo_por_templo(actividades_df, mesas_df)
@@ -838,8 +845,8 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     # Puestos
     puestos_layer = folium.FeatureGroup(name="Puestos de votación fijos", show=True)
     for _, r in puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
-        var = r.get("VARIACION_ABSOLUTA", np.nan)
-        color = "green" if pd.notna(var) and var > 0 else "red" if pd.notna(var) and var < 0 else "gray"
+        iglesia = r.get("IGLESIA", "")
+        color = COLORES_TEMPLOS.get(iglesia, "#64748B")
         puesto = safe_html(r.get("PUESTO", ""))
         iglesia = safe_html(r.get("IGLESIA", ""))
         barrio = safe_html(r.get("BARRIO", ""))
@@ -958,12 +965,14 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     mesas_layer.add_to(m)
 
     upz_legend = '<span style="color:#2563EB;">■</span> UPZ Kennedy<br>' if upz_gj else ""
+    legend_items = "".join(
+        f'<br><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{color};margin-right:6px;"></span>Puesto ({templo})'
+        for templo, color in COLORES_TEMPLOS.items()
+    )
     legend_html = f"""
     <div style="position: fixed; bottom: 35px; right: 35px; z-index:9999; background:white; padding:12px 14px; border:1px solid #CBD5E1; border-radius:10px; box-shadow:0 3px 12px rgba(0,0,0,.12); font-size:13px;">
-    <b>Lectura del mapa</b><br>
-    <span style="color:green;">●</span> Puesto con crecimiento<br>
-    <span style="color:red;">●</span> Puesto con caída<br>
-    <span style="color:gray;">●</span> Sin comparación<br>
+    <b>Lectura del mapa</b>{legend_items}<br>
+    <span style="color:gray;">●</span> Puesto (otro templo)<br>
     <span style="color:purple;">⬟</span> Iglesia / templo<br>
     <span style="color:blue;">●</span> Actividad de campaña<br>
     <span style="color:orange;">⬟</span> Mesa de trabajo<br>
@@ -1075,7 +1084,9 @@ if (st.session_state.get("ajustes_asignacion") or st.session_state.get("ajustes_
     for col in cols_to_update:
         if col in resumen_iglesia.columns:
             resumen_iglesia[col] = resumen_iglesia[col].fillna(0)
-    asignacion = calcular_distancias_a_templos_v2(puestos, iglesias)
+
+asignacion = calcular_distancias_a_templos_v2(puestos, iglesias)
+
 
 # Ensure numerics
 for df in [puestos, resumen_iglesia, resumen_puesto, resumen_barrio, matriz, asignacion, resumen_asignacion]:
@@ -1275,6 +1286,7 @@ with tab_resumen:
     dcol1, dcol2 = st.columns([2, 1])
     with dcol1:
         st.dataframe(focos, hide_index=True, width="stretch")
+        st.download_button("Descargar panel en Excel", to_excel_bytes(focos, "Panel Decision"), "panel_decision.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_panel")
     with dcol2:
         st.markdown(
             """
@@ -1473,6 +1485,7 @@ with tab_mapa:
 
     st.markdown("### Resumen operativo por templo")
     st.dataframe(resumen_operativo_mapa, hide_index=True, width="stretch")
+    st.download_button("Descargar tabla en Excel", to_excel_bytes(resumen_operativo_mapa, "Resumen Operativo"), "resumen_operativo.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_res_op")
 
     asignacion_reporte_mapa = aplicar_ajustes_asignacion(asignacion.copy())
     informe_mapa = generar_informe_territorial(asignacion_reporte_mapa, actividades, mesas)
@@ -1490,9 +1503,8 @@ with tab_asignacion:
     st.markdown(
         """
         <div class="section-card">
-        Esta sección conserva la asignación de puestos registrada en el documento base. La única propuesta
-        automática de cambio es para identificar puestos que, por cercanía territorial, podrían pasar a
-        <b>Valladolid</b>. Los demás templos no se mueven por cercanía.
+        Esta sección conserva la asignación de puestos original registrada en el documento base. Ningún puesto
+        es reasignado automáticamente. Usted puede ajustar y guardar el templo asignado para cada puesto según el análisis territorial.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1566,14 +1578,17 @@ with tab_asignacion:
 
     st.markdown("### Resumen documental base")
     st.dataframe(resumen_documental, hide_index=True, width="stretch")
+    st.download_button("Descargar resumen base en Excel", to_excel_bytes(resumen_documental, "Resumen Base"), "resumen_documental_base.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_res_base")
 
     st.markdown("### Resumen de asignación")
     st.dataframe(resumen_final, hide_index=True, width="stretch")
+    st.download_button("Descargar resumen de asignación en Excel", to_excel_bytes(resumen_final, "Resumen Asignacion"), "resumen_asignacion.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_res_asig")
     if ajustes_puestos:
         st.caption(f"Resumen ajustado con {fmt_number(len(ajustes_puestos), 0)} cambio(s) de puesto(s).")
 
     st.markdown("### Puestos asignados por templo")
     st.dataframe(tabla_templos, hide_index=True, width="stretch")
+    st.download_button("Descargar puestos por templo en Excel", to_excel_bytes(tabla_templos, "Puestos por Templo"), "puestos_por_templo.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_puestos_templo")
 
     with st.expander("Lectura automática de la asignación", expanded=True):
         puestos_lejanos = int(pd.to_numeric(asignacion_final["DISTANCIA_ASIGNADA_KM"], errors="coerce").gt(3).sum())
@@ -1602,6 +1617,7 @@ with tab_iglesia:
         "PUESTO_MAYOR_CAIDA", "PUESTO_MAYOR_CRECIMIENTO"
     ]
     st.dataframe(resumen_iglesia_f[cols_show], width="stretch", hide_index=True)
+    st.download_button("Descargar análisis por iglesia en Excel", to_excel_bytes(resumen_iglesia_f[cols_show], "Analisis Iglesia"), "analisis_iglesia.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_iglesia")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1686,11 +1702,9 @@ with tab_puesto:
         "PRIORIDAD", "ACCION_RECOMENDADA"
     ]
     cols_puesto = [c for c in cols_puesto if c in puestos_f.columns]
-    st.dataframe(
-        puestos_f[cols_puesto].sort_values(["PRIORIDAD", "VOTOS_2026"], ascending=[True, False]),
-        width="stretch",
-        hide_index=True,
-    )
+    df_puesto_show = puestos_f[cols_puesto].sort_values(["PRIORIDAD", "VOTOS_2026"], ascending=[True, False])
+    st.dataframe(df_puesto_show, width="stretch", hide_index=True)
+    st.download_button("Descargar matriz por puesto en Excel", to_excel_bytes(df_puesto_show, "Matriz Puesto"), "matriz_puesto.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_mat_puesto")
 
 with tab_barrio:
     st.subheader("Barrio / UPZ")
@@ -1698,6 +1712,7 @@ with tab_barrio:
         st.info("No hay resumen por barrio o UPZ disponible.")
     else:
         st.dataframe(resumen_barrio, width="stretch", hide_index=True)
+        st.download_button("Descargar resumen por barrio en Excel", to_excel_bytes(resumen_barrio, "Resumen Barrio"), "resumen_barrio.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_res_barrio")
 
     if "UPZ" in puestos.columns and puestos["UPZ"].notna().any() and puestos["UPZ"].astype(str).str.len().gt(0).any():
         upz_summary = puestos.groupby("UPZ", dropna=False).agg(
@@ -1730,6 +1745,7 @@ with tab_prioridad:
     if "PUNTAJE_PRIORIDAD" in matriz_show.columns:
         matriz_show = matriz_show.sort_values(["NIVEL_PRIORIDAD", "PUNTAJE_PRIORIDAD", "VOTOS_2026"], ascending=[True, False, False])
     st.dataframe(matriz_show, width="stretch", hide_index=True)
+    st.download_button("Descargar matriz de priorización en Excel", to_excel_bytes(matriz_show, "Priorizacion"), "matriz_priorizacion.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_mat_prior")
 
     prioridad_count = matriz.groupby("NIVEL_PRIORIDAD").size().reset_index(name="PUESTOS")
     pcol1, pcol2 = st.columns(2)
