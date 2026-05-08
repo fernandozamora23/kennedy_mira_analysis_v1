@@ -583,13 +583,41 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
         color = COLORES_TEMPLOS.get(r["IGLESIA"], "#334155")
         folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            tooltip=f"Templo: {r['IGLESIA']}",
+            tooltip=f"Templo oficial: {r['IGLESIA']}",
             popup=folium.Popup(f"<b>{safe_html(r['IGLESIA'])}</b><br>Lat: {r['LATITUD']}<br>Lon: {r['LONGITUD']}", max_width=260),
-            icon=folium.Icon(color="purple", icon="home", prefix="fa"),
+            icon=folium.DivIcon(
+                html=f'''
+                <div style="
+                    width:20px;
+                    height:20px;
+                    border-radius:50%;
+                    background:{color};
+                    border:4px solid white;
+                    box-shadow:0 2px 10px rgba(15,23,42,.35);
+                "></div>
+                '''
+            ),
         ).add_to(templos_layer)
         folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            icon=folium.DivIcon(html=f'<div style="background:white;border:1px solid {color};border-radius:8px;padding:3px 7px;color:{color};font-size:11px;font-weight:800;white-space:nowrap;">{safe_html(r["IGLESIA"])}</div>'),
+            icon=folium.DivIcon(
+                html=f'''
+                <div style="
+                    transform:translate(20px,-12px);
+                    background:#FFFFFF;
+                    border:1px solid {color};
+                    border-radius:999px;
+                    padding:4px 8px;
+                    color:{color};
+                    font-size:10px;
+                    font-weight:800;
+                    box-shadow:0 1px 6px rgba(15,23,42,.18);
+                    white-space:nowrap;
+                ">
+                    {safe_html(r["IGLESIA"])}
+                </div>
+                '''
+            ),
         ).add_to(templos_layer)
     templos_layer.add_to(m)
 
@@ -613,37 +641,68 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
         <b>Prioridad:</b> {safe_html(r.get('PRIORIDAD'))}
         </div>
         """
-        folium.CircleMarker(
-            location=[r["LATITUD"], r["LONGITUD"]],
-            radius=6,
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.78,
-            weight=1.3,
-            tooltip=f"{r.get('PUESTO')} | {safe_html(r.get('BARRIO'))} | {safe_html(templo)} | {fmt_number(distancia, 2)} km | {fmt_number(r.get('VOTOS_2026'), 0)} votos",
-            popup=folium.Popup(popup, max_width=380),
-        ).add_to(puestos_layer)
+        
         if templo in templo_coords:
             folium.PolyLine(
                 locations=[[r["LATITUD"], r["LONGITUD"]], list(templo_coords[templo])],
                 color=color,
-                weight=1.5,
-                opacity=0.2,
-                dash_array="5, 8",
+                weight=2.4,
+                opacity=0.58,
+                dash_array="6 6",
+                tooltip=f"{r.get('PUESTO')} → {templo} | {fmt_number(distancia, 2)} km",
             ).add_to(lineas_layer)
+            
+        folium.CircleMarker(
+            location=[r["LATITUD"], r["LONGITUD"]],
+            radius=6.5,
+            color="#FFFFFF",
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.86,
+            weight=1.6,
+            tooltip=f"{r.get('PUESTO')} | {safe_html(r.get('BARRIO'))} | {safe_html(templo)} | {fmt_number(distancia, 2)} km | {fmt_number(r.get('VOTOS_2026'), 0)} votos",
+            popup=folium.Popup(popup, max_width=380),
+        ).add_to(puestos_layer)
+        
     lineas_layer.add_to(m)
     puestos_layer.add_to(m)
 
     legend_items = "".join(
-        f'<div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{color};margin-right:6px;"></span>{templo}</div>'
+        f'''
+        <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
+            <span style="width:10px;height:10px;border-radius:50%;background:{color};display:inline-block;"></span>
+            <span>{templo}</span>
+        </div>
+        '''
         for templo, color in COLORES_TEMPLOS.items()
     )
-    m.get_root().html.add_child(folium.Element(f"""
-    <div style="position: fixed; bottom: 35px; right: 35px; z-index:9999; background:white; padding:12px 14px; border:1px solid #CBD5E1; border-radius:10px; box-shadow:0 3px 12px rgba(0,0,0,.12); font-size:13px;">
-    <b>Asignación territorial</b>{legend_items}
+
+    legend_html = f'''
+    <div style="
+        position: fixed;
+        bottom: 35px;
+        right: 35px;
+        z-index:9999;
+        background:white;
+        padding:12px 14px;
+        border:1px solid #CBD5E1;
+        border-radius:12px;
+        box-shadow:0 4px 14px rgba(15,23,42,.16);
+        font-size:12px;
+        color:#0F172A;
+        min-width:210px;
+        font-family: 'Inter', sans-serif;
+    ">
+        <div style="font-weight:900;margin-bottom:7px;">Asignación territorial</div>
+        {legend_items}
+        <div style="height:1px;background:#E2E8F0;margin:8px 0;"></div>
+        <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
+            <span style="width:24px;border-top:2px dashed #64748B;display:inline-block;"></span>
+            <span>Línea puesto-templo</span>
+        </div>
     </div>
-    """))
+    '''
+    m.get_root().html.add_child(folium.Element(legend_html))
     folium.LayerControl(collapsed=False).add_to(m)
     return m
 
@@ -1628,7 +1687,33 @@ with tab_asignacion:
     with a5:
         metric_card("Base Carvajal", fmt_number(resumen_documental.loc[resumen_documental["TEMPLO"].eq("CARVAJAL"), "PUESTOS"].iloc[0] if not resumen_documental.empty else 0, 0))
 
-    mapa_asignacion = crear_mapa_asignacion(asignacion_final, iglesias)
+    opciones_filtro_asignacion = ["Todos los templos"] + TEMPLOS_OFICIALES
+    filtro_asignacion_templo = st.selectbox(
+        "Filtrar mapa de asignación por templo",
+        opciones_filtro_asignacion,
+        key="filtro_asignacion_templo"
+    )
+    st.caption("Este filtro solo modifica la visualización del mapa. La asignación consolidada y los exportables mantienen todos los puestos.")
+
+    asignacion_mapa = asignacion_final.copy()
+    if filtro_asignacion_templo != "Todos los templos":
+        asignacion_mapa = asignacion_mapa[
+            asignacion_mapa["TEMPLO_ASIGNADO_FINAL"].eq(filtro_asignacion_templo)
+        ].copy()
+
+    puestos_visibles_asig = len(asignacion_mapa)
+    votos_visibles_asig = pd.to_numeric(asignacion_mapa.get("VOTOS_2026", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
+    distancia_prom_visible = pd.to_numeric(asignacion_mapa.get("DISTANCIA_ASIGNADA_KM", pd.Series(dtype=float)), errors="coerce").mean()
+
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        metric_card("Puestos visibles", fmt_number(puestos_visibles_asig, 0))
+    with m2:
+        metric_card("Votos 2026 visibles", fmt_number(votos_visibles_asig, 0))
+    with m3:
+        metric_card("Distancia promedio", f"{fmt_number(distancia_prom_visible, 2)} km")
+
+    mapa_asignacion = crear_mapa_asignacion(asignacion_mapa, iglesias)
     st_folium(mapa_asignacion, width=None, height=720)
 
     with st.expander("Ajustar templo de un puesto de votación", expanded=False):
