@@ -977,6 +977,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
 
     # Mesas
     mesas_layer = folium.FeatureGroup(name="Mesas de trabajo", show=True)
+    for _, r in mesas.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         icon_html_mesas = """
         <div style="background-color: #F8FAFC; color: #1E3A8A; border-radius: 50%; width: 20px; height: 20px; display: flex; justify-content: center; align-items: center; font-size: 11px; font-weight: 800; border: 2.5px solid #1E3A8A; box-shadow: 0 2px 4px rgba(0,0,0,0.15);">
         M
