@@ -44,6 +44,8 @@ COLOR_GREEN = "#16A34A"
 COLOR_BLUE = "#2563EB"
 COLOR_ORANGE = "#F97316"
 COLOR_PURPLE = "#7C3AED"
+BASE_TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+BASE_TILE_ATTR = "&copy; OpenStreetMap contributors &copy; CARTO"
 TEMPLOS_OFICIALES = ["CLASS ROMA", "KENNEDY CENTRAL", "PATIO BONITO", "CARVAJAL", "VALLADOLID"]
 COLORES_TEMPLOS = {
     "CLASS ROMA": "#7C3AED",
@@ -1227,6 +1229,23 @@ def add_map_control_html(mapa, html_content, position="bottomright"):
     mapa.add_child(MapControlHtml(html_content, position=position))
 
 
+def crear_mapa_base(location=None, zoom_start=13, control_scale=True):
+    mapa = folium.Map(
+        location=location or KENNEDY_CENTER,
+        zoom_start=zoom_start,
+        tiles=None,
+        control_scale=control_scale,
+    )
+    folium.TileLayer(
+        tiles=BASE_TILE_URL,
+        attr=BASE_TILE_ATTR,
+        name="Base territorial",
+        control=False,
+        opacity=0.96,
+    ).add_to(mapa)
+    return mapa
+
+
 def agregar_heatmap_electoral(mapa, puestos_df, show=True, name="Rango de calor electoral 2026"):
     heat_config = crear_heat_config(puestos_df)
     if not heat_config:
@@ -1278,7 +1297,7 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df, layers_config=None):
     show_puestos = layers_config.get("puestos", True)
     show_templos = layers_config.get("templos", True)
 
-    m = folium.Map(location=KENNEDY_CENTER, zoom_start=13, tiles="CartoDB positron", control_scale=True)
+    m = crear_mapa_base(location=KENNEDY_CENTER, zoom_start=13, control_scale=True)
     Fullscreen(position="topleft").add_to(m)
     MiniMap(toggle_display=True, position="bottomleft").add_to(m)
     if show_contorno:
@@ -1651,7 +1670,7 @@ def aplicar_filtros(puestos, actividades, mesas, filtros):
 
 def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general", layers_config=None):
     layers_config = layers_config or {}
-    m = folium.Map(location=KENNEDY_CENTER, zoom_start=13, tiles="CartoDB positron", control_scale=True)
+    m = crear_mapa_base(location=KENNEDY_CENTER, zoom_start=13, control_scale=True)
     Fullscreen(position="topleft").add_to(m)
     MiniMap(toggle_display=True, position="bottomleft").add_to(m)
     show_contorno = layers_config.get("contorno", True)
@@ -2840,7 +2859,7 @@ with tab_iglesia:
                     if not templo_coord.empty:
                         lat_t = templo_coord.iloc[0]["LATITUD"]
                         lon_t = templo_coord.iloc[0]["LONGITUD"]
-                        sub_m = folium.Map(location=[lat_t, lon_t], zoom_start=14, tiles="cartodbpositron")
+                        sub_m = crear_mapa_base(location=[lat_t, lon_t], zoom_start=14, control_scale=False)
                         
                         # Add Temple
                         folium.Marker(
