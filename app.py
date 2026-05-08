@@ -1238,12 +1238,31 @@ def agregar_heatmap_electoral(mapa, puestos_df, show=True, name="Rango de calor 
     return heat_config
 
 
-def crear_mapa_asignacion(asignacion_df, iglesias_df):
+def render_folium_map(mapa, height=760, key=None):
+    st_folium(
+        mapa,
+        height=height,
+        use_container_width=True,
+        returned_objects=[],
+        key=key,
+    )
+
+
+def crear_mapa_asignacion(asignacion_df, iglesias_df, layers_config=None):
+    layers_config = layers_config or {}
+    show_contorno = layers_config.get("contorno", True)
+    show_heat = layers_config.get("heat", True)
+    show_lineas = layers_config.get("lineas", True)
+    show_puestos = layers_config.get("puestos", True)
+    show_templos = layers_config.get("templos", True)
+
     m = folium.Map(location=KENNEDY_CENTER, zoom_start=13, tiles="CartoDB positron", control_scale=True)
     Fullscreen(position="topleft").add_to(m)
     MiniMap(toggle_display=True, position="bottomleft").add_to(m)
-    agregar_contorno_localidades(m)
-    agregar_heatmap_electoral(m, asignacion_df, show=True, name="Rango de calor votos 2026")
+    if show_contorno:
+        agregar_contorno_localidades(m)
+    if show_heat:
+        agregar_heatmap_electoral(m, asignacion_df, show=True, name="Rango de calor votos 2026")
 
     templos = iglesias_df[iglesias_df["IGLESIA"].isin(TEMPLOS_OFICIALES)].dropna(subset=["LATITUD", "LONGITUD"]).copy()
     templo_coords = {r["IGLESIA"]: (r["LATITUD"], r["LONGITUD"]) for _, r in templos.iterrows()}
@@ -1264,8 +1283,8 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
             icon=crear_etiqueta_templo(r["IGLESIA"], color, dx=34, dy=-20),
         ).add_to(templos_layer)
 
-    puestos_layer = folium.FeatureGroup(name="Puestos por templo asignado", show=False)
-    lineas_layer = folium.FeatureGroup(name="Líneas puesto-templo", show=False)
+    puestos_layer = folium.FeatureGroup(name="Puestos por templo asignado", show=show_puestos)
+    lineas_layer = folium.FeatureGroup(name="Líneas puesto-templo", show=show_lineas)
     for _, r in asignacion_df.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         templo = r.get("TEMPLO_ASIGNADO_FINAL")
         color = COLORES_TEMPLOS.get(templo, "#64748B")
@@ -1306,9 +1325,12 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
             popup=folium.Popup(popup, max_width=380),
         ).add_to(puestos_layer)
         
-    lineas_layer.add_to(m)
-    puestos_layer.add_to(m)
-    templos_layer.add_to(m)
+    if show_lineas:
+        lineas_layer.add_to(m)
+    if show_puestos:
+        puestos_layer.add_to(m)
+    if show_templos:
+        templos_layer.add_to(m)
 
     legend_items = "".join(
         f'''
@@ -1350,7 +1372,6 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
     </div>
     '''
     m.get_root().html.add_child(folium.Element(legend_html))
-    folium.LayerControl(collapsed=False).add_to(m)
     return m
 
 
@@ -1620,20 +1641,24 @@ def aplicar_filtros(puestos, actividades, mesas, filtros):
     return puestos_f, acts_f, mesas_f
 
 
-def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general"):
+def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general", layers_config=None):
+    layers_config = layers_config or {}
     m = folium.Map(location=KENNEDY_CENTER, zoom_start=13, tiles="CartoDB positron", control_scale=True)
     Fullscreen(position="topleft").add_to(m)
     MiniMap(toggle_display=True, position="bottomleft").add_to(m)
-    show_heat_default = map_mode in {"Vista general", "Vista de calor"}
-    show_puestos_default = map_mode == "Vista electoral"
-    show_acts_default = map_mode == "Vista operativa"
-    show_mesas_default = map_mode == "Vista operativa"
+    show_contorno = layers_config.get("contorno", True)
+    show_upz = layers_config.get("upz", False)
+    show_heat_default = layers_config.get("heat", map_mode in {"Vista general", "Vista de calor"})
+    show_puestos_default = layers_config.get("puestos", map_mode == "Vista electoral")
+    show_acts_default = layers_config.get("actividades", map_mode == "Vista operativa")
+    show_mesas_default = layers_config.get("mesas", map_mode == "Vista operativa")
+    show_templos = layers_config.get("templos", True)
     localidades_gj = cargar_geojson(LOCALIDADES_GEOJSON)
-    if localidades_gj:
+    if show_contorno and localidades_gj:
         agregar_contorno_localidades(m)
 
     upz_gj = cargar_geojson(UPZ_GEOJSON)
-    if upz_gj:
+    if show_upz and upz_gj:
         try:
             upz_fields = [f for f in ["UPZ", "NOMBRE", "CODIGO", "AREA_HA"] if any(f in (x.get("properties") or {}) for x in upz_gj.get("features", []))]
             folium.GeoJson(
@@ -1657,7 +1682,8 @@ def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general"):
         except Exception:
             pass
 
-    agregar_heatmap_electoral(m, puestos, show=show_heat_default, name="Rango de calor votos 2026")
+    if show_heat_default:
+        agregar_heatmap_electoral(m, puestos, show=True, name="Rango de calor votos 2026")
 
     # MIRA Logo
     mira_logo_html = """
@@ -1707,7 +1733,8 @@ def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general"):
             popup=folium.Popup(popup, max_width=380),
             tooltip=f"{r.get('PUESTO','')} | {r.get('IGLESIA','')} | {fmt_number(r.get('VOTOS_2026'),0)} votos",
         ).add_to(puestos_layer)
-    puestos_layer.add_to(m)
+    if show_puestos_default:
+        puestos_layer.add_to(m)
 
     # Churches
     iglesia_layer = folium.FeatureGroup(name="Iglesias / templos", show=True)
@@ -1727,7 +1754,8 @@ def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general"):
             location=[r["LATITUD"], r["LONGITUD"]],
             icon=crear_etiqueta_templo(r.get("IGLESIA", ""), color, dx=30, dy=-19),
         ).add_to(iglesia_layer)
-    iglesia_layer.add_to(m)
+    if show_templos:
+        iglesia_layer.add_to(m)
 
     # Activities
     acts_layer = folium.FeatureGroup(name="Actividades de campaña", show=show_acts_default)
@@ -1749,7 +1777,8 @@ def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general"):
             popup=folium.Popup(popup_actividad, max_width=340),
             icon=crear_icono_div("actividad", "#2563EB", "A"),
         ).add_to(acts_layer)
-    acts_layer.add_to(m)
+    if show_acts_default:
+        acts_layer.add_to(m)
 
     mesas_layer = folium.FeatureGroup(name="Mesas de trabajo", show=show_mesas_default)
     for _, r in mesas.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
@@ -1772,7 +1801,8 @@ def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general"):
             popup=folium.Popup(popup_mesa, max_width=360),
             icon=crear_icono_div("mesa", "#F97316", "M"),
         ).add_to(mesas_layer)
-    mesas_layer.add_to(m)
+    if show_mesas_default:
+        mesas_layer.add_to(m)
 
     legend_items = "".join(
         f'''
@@ -1821,14 +1851,10 @@ def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general"):
             <span>Otras localidades</span>
         </div>
         <div style="height:1px;background:#E2E8F0;margin:6px 0;"></div>
-        <div style="font-size:9.5px;color:#64748B;line-height:1.2;">
-            Active capas adicionales desde el control superior derecho.
-        </div>
     </div>
     '''
 
     m.get_root().html.add_child(folium.Element(legend_html))
-    folium.LayerControl(collapsed=False).add_to(m)
     return m
 
 
@@ -2329,17 +2355,35 @@ with tab_mapa:
     with q3:
         metric_card("Mesas sin coordenadas", fmt_number(mesas_sin_coord, 0), icon="📍")
 
-    mapa = crear_mapa(puestos_mapa, iglesias_mapa, acts_mapa, mesas_mapa, map_mode=map_mode)
+    with st.expander("Capas del mapa territorial", expanded=False):
+        layer_cols = st.columns(6)
+        with layer_cols[0]:
+            layer_contorno = st.checkbox("Contorno", value=True, key=f"territorial_contorno_{map_mode}")
+        with layer_cols[1]:
+            layer_templos = st.checkbox("Templos", value=True, key=f"territorial_templos_{map_mode}")
+        with layer_cols[2]:
+            layer_heat = st.checkbox("Rango electoral", value=map_mode in {"Vista general", "Vista de calor"}, key=f"territorial_heat_{map_mode}")
+        with layer_cols[3]:
+            layer_puestos = st.checkbox("Puestos", value=map_mode == "Vista electoral", key=f"territorial_puestos_{map_mode}")
+        with layer_cols[4]:
+            layer_actividades = st.checkbox("Actividades", value=map_mode == "Vista operativa", key=f"territorial_actividades_{map_mode}")
+        with layer_cols[5]:
+            layer_mesas = st.checkbox("Mesas", value=map_mode == "Vista operativa", key=f"territorial_mesas_{map_mode}")
+
+    territorial_layers = {
+        "contorno": layer_contorno,
+        "templos": layer_templos,
+        "heat": layer_heat,
+        "puestos": layer_puestos,
+        "actividades": layer_actividades,
+        "mesas": layer_mesas,
+    }
+    mapa = crear_mapa(puestos_mapa, iglesias_mapa, acts_mapa, mesas_mapa, map_mode=map_mode, layers_config=territorial_layers)
     st.markdown("### Mapa territorial")
-    st.markdown("<div style='font-size:14px; color:#475569; margin-bottom:10px;'>💡 <b>Vista inicial limpia:</b> puestos de votación y templos oficiales. Active el mapa de calor, actividades o mesas desde el control de capas si requiere mayor detalle.</div>", unsafe_allow_html=True)
-    map_key = f"mapa_territorial_{map_mode}_{filtro_templo}_{ventana_tiempo}".replace(" ", "_").replace("/", "_")
-    st_folium(
-        mapa,
-        height=760,
-        use_container_width=True,
-        returned_objects=[],
-        key=map_key,
-    )
+    st.markdown("<div style='font-size:14px; color:#475569; margin-bottom:10px;'>💡 <b>Vista inicial limpia:</b> el modo de vista controla si se muestran votos, calor, actividades o mesas. Las convenciones del mapa quedan integradas abajo.</div>", unsafe_allow_html=True)
+    map_key = f"mapa_territorial_v3_{map_mode}_{filtro_templo}_{ventana_tiempo}_{layer_contorno}_{layer_templos}_{layer_heat}_{layer_puestos}_{layer_actividades}_{layer_mesas}".replace(" ", "_").replace("/", "_")
+    with st.container(border=True):
+        render_folium_map(mapa, height=790, key=map_key)
 
     with st.expander("Ajustar templo de una mesa de trabajo", expanded=False):
         st.caption("Ajuste definitivo para modificar la asignación. No modifica el Excel maestro directamente pero sí los reportes exportables.")
@@ -2516,16 +2560,31 @@ with tab_asignacion:
         metric_card("Asignados a Valladolid", fmt_number(asignados_valladolid, 0))
 
     st.markdown("### Mapa de asignación de puestos de votación")
-    st.caption("Cada punto conserva el color del templo vigente; las líneas muestran la relación puesto-templo. Active el rango de calor desde capas cuando necesite ver concentración electoral.")
-    mapa_asignacion = crear_mapa_asignacion(asignacion_filtrada, iglesias)
-    asig_map_key = f"mapa_asignacion_{filtro_asignacion_templo}_{filtro_prioridad_asignacion}_{filtro_estado_asignacion}_{filtro_criticos_asignacion}".replace(" ", "_").replace("/", "_")
-    st_folium(
-        mapa_asignacion,
-        height=760,
-        use_container_width=True,
-        returned_objects=[],
-        key=asig_map_key,
-    )
+    st.caption("Cada punto conserva el color del templo vigente; las líneas muestran la relación puesto-templo. Las convenciones ejecutivas del mapa aparecen integradas abajo.")
+    with st.expander("Capas del mapa de asignación", expanded=False):
+        asig_layer_cols = st.columns(5)
+        with asig_layer_cols[0]:
+            asig_layer_contorno = st.checkbox("Contorno", value=True, key="asignacion_layer_contorno")
+        with asig_layer_cols[1]:
+            asig_layer_heat = st.checkbox("Rango electoral", value=True, key="asignacion_layer_heat")
+        with asig_layer_cols[2]:
+            asig_layer_lineas = st.checkbox("Líneas", value=True, key="asignacion_layer_lineas")
+        with asig_layer_cols[3]:
+            asig_layer_puestos = st.checkbox("Puestos", value=True, key="asignacion_layer_puestos")
+        with asig_layer_cols[4]:
+            asig_layer_templos = st.checkbox("Templos", value=True, key="asignacion_layer_templos")
+
+    asignacion_layers = {
+        "contorno": asig_layer_contorno,
+        "heat": asig_layer_heat,
+        "lineas": asig_layer_lineas,
+        "puestos": asig_layer_puestos,
+        "templos": asig_layer_templos,
+    }
+    mapa_asignacion = crear_mapa_asignacion(asignacion_filtrada, iglesias, layers_config=asignacion_layers)
+    asig_map_key = f"mapa_asignacion_v3_{filtro_asignacion_templo}_{filtro_prioridad_asignacion}_{filtro_estado_asignacion}_{filtro_criticos_asignacion}_{asig_layer_contorno}_{asig_layer_heat}_{asig_layer_lineas}_{asig_layer_puestos}_{asig_layer_templos}".replace(" ", "_").replace("/", "_")
+    with st.container(border=True):
+        render_folium_map(mapa_asignacion, height=790, key=asig_map_key)
 
     st.markdown("### Semáforo territorial")
     semaforo_cols = [
