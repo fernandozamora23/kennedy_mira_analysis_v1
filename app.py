@@ -1688,18 +1688,120 @@ with tab_iglesia:
         )
         st.plotly_chart(fig, width="stretch")
 
+    # Averages for radar chart
+    promedio_votos = resumen_iglesia_f["VOTOS_2026"].mean() if not resumen_iglesia_f.empty else 1
+    promedio_crecimiento = resumen_iglesia_f["VARIACION_PORCENTUAL"].mean() if not resumen_iglesia_f.empty else 0.01
+    promedio_actividades = resumen_iglesia_f["ACTIVIDADES_CAMPANA"].mean() if not resumen_iglesia_f.empty else 1
+    promedio_mesas = resumen_iglesia_f["MESAS_TRABAJO"].mean() if not resumen_iglesia_f.empty else 1
+
     for iglesia in iglesias["IGLESIA"].tolist():
-        sub = puestos[puestos["IGLESIA"].eq(iglesia)].copy()
-        res = resumen_iglesia[resumen_iglesia["IGLESIA"].eq(iglesia)]
-        with st.expander(f"Lectura estratégica: {iglesia}", expanded=False):
+        sub_puestos = puestos_f[puestos_f["IGLESIA"].eq(iglesia)].copy()
+        sub_acts = acts_f[acts_f["IGLESIA"].eq(iglesia)].copy()
+        sub_mesas = mesas_f[mesas_f["IGLESIA"].eq(iglesia)].copy()
+        res = resumen_iglesia_f[resumen_iglesia_f["IGLESIA"].eq(iglesia)]
+        
+        with st.expander(f"Ficha Estratégica Integral: {iglesia}", expanded=False):
             if not res.empty:
-                st.write(res.iloc[0].get("LECTURA_ESTRATEGICA", ""))
-                st.write("**Recomendación:**", res.iloc[0].get("RECOMENDACION", ""))
-            if sub.empty:
+                r_iglesia = res.iloc[0]
+                
+                # 1. KPIs
+                k1, k2, k3, k4 = st.columns(4)
+                votos_2026 = r_iglesia.get("VOTOS_2026", 0)
+                votos_2023 = r_iglesia.get("VOTOS_2023", 0)
+                var_abs = r_iglesia.get("VARIACION_ABSOLUTA", 0)
+                var_pct = r_iglesia.get("VARIACION_PORCENTUAL", 0)
+                acts_totales = r_iglesia.get("ACTIVIDADES_CAMPANA", 0) + r_iglesia.get("MESAS_TRABAJO", 0)
+                roi = votos_2026 / acts_totales if acts_totales > 0 else 0
+                
+                # Semaforo de Riesgo
+                if var_pct < -0.10:
+                    semaforo = "🔴 Crítico (>10% Fuga)"
+                elif var_pct < 0:
+                    semaforo = "🟡 Medio (Pérdida)"
+                else:
+                    semaforo = "🟢 Fortaleza (Crecimiento)"
+                
+                with k1:
+                    metric_card("Votos 2026", fmt_number(votos_2026, 0), icon="📊")
+                with k2:
+                    metric_card("Retención", fmt_pct(var_pct), icon="📈")
+                with k3:
+                    metric_card("ROI Político", f"{fmt_number(roi, 1)} v/act", icon="⚡")
+                with k4:
+                    metric_card("Estado", semaforo, icon="🚦")
+                
+                # 2. Charts and Maps
+                col_chart, col_map = st.columns([1, 1.2])
+                with col_chart:
+                    # Radar Chart
+                    fig_radar = go.Figure()
+                    fig_radar.add_trace(go.Scatterpolar(
+                        r=[
+                            min(votos_2026 / max(1, promedio_votos), 2.5), 
+                            min(max(var_pct + 1, 0) / max(0.01, promedio_crecimiento + 1), 2.5), 
+                            min(r_iglesia.get("ACTIVIDADES_CAMPANA", 0) / max(1, promedio_actividades), 2.5), 
+                            min(r_iglesia.get("MESAS_TRABAJO", 0) / max(1, promedio_mesas), 2.5),
+                            min(roi / max(1, (promedio_votos / max(1, promedio_actividades + promedio_mesas))), 2.5)
+                        ],
+                        theta=['Caudal<br>Electoral', 'Retención<br>Electoral', 'Campaña<br>(Actividades)', 'Trabajo<br>Social (Mesas)', 'Eficiencia<br>(ROI)'],
+                        fill='toself',
+                        name=iglesia,
+                        line_color='#1D4ED8',
+                        fillcolor='rgba(29, 78, 216, 0.3)'
+                    ))
+                    fig_radar.update_layout(
+                        polar=dict(radialaxis=dict(visible=False, range=[0, 2.5])),
+                        showlegend=False,
+                        title="Perfil Estratégico (vs Promedio Kennedy)",
+                        margin=dict(t=50, b=20, l=40, r=40),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)"
+                    )
+                    st.plotly_chart(fig_radar, use_container_width=True)
+
+                with col_map:
+                    # Create Sub-map
+                    templo_coord = iglesias[iglesias["IGLESIA"].eq(iglesia)]
+                    if not templo_coord.empty:
+                        lat_t = templo_coord.iloc[0]["LATITUD"]
+                        lon_t = templo_coord.iloc[0]["LONGITUD"]
+                        sub_m = folium.Map(location=[lat_t, lon_t], zoom_start=14, tiles="cartodbpositron")
+                        
+                        # Add Temple
+                        folium.Marker(
+                            [lat_t, lon_t], 
+                            icon=folium.Icon(color="darkblue", icon="home", prefix="fa"),
+                            tooltip=iglesia
+                        ).add_to(sub_m)
+                        
+                        # Add Puestos and lines
+                        for _, r in sub_puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
+                            folium.CircleMarker(
+                                [r["LATITUD"], r["LONGITUD"]],
+                                radius=max(5, min(14, float(r.get("VOTOS_2026", 0))/15)),
+                                color="#1E3A8A", fill=True, fill_color="#3B82F6", fill_opacity=0.7, weight=1,
+                                tooltip=f"{r.get('PUESTO')} | {fmt_number(r.get('VOTOS_2026'),0)} votos"
+                            ).add_to(sub_m)
+                            folium.PolyLine([[lat_t, lon_t], [r["LATITUD"], r["LONGITUD"]]], color="#1E3A8A", weight=1.5, opacity=0.35, dash_array="4,6").add_to(sub_m)
+
+                        # Add Mesas
+                        icon_html_mesas = '<div style="background-color: #F8FAFC; color: #1E3A8A; border-radius: 50%; width: 14px; height: 14px; display: flex; justify-content: center; align-items: center; font-size: 8px; font-weight: 800; border: 2px solid #1E3A8A;">M</div>'
+                        for _, r in sub_mesas.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
+                            folium.Marker([r["LATITUD"], r["LONGITUD"]], icon=folium.DivIcon(html=icon_html_mesas), tooltip=f"Mesa: {r.get('TEMA')}").add_to(sub_m)
+                            
+                        st_folium(sub_m, height=420, use_container_width=True, key=f"submap_{iglesia}")
+                    else:
+                        st.info("Sin coordenadas del templo.")
+
+                st.markdown("---")
+                st.write(f"**Lectura estratégica:** {r_iglesia.get('LECTURA_ESTRATEGICA', '')}")
+                st.write(f"**Recomendación táctica:** {r_iglesia.get('RECOMENDACION', '')}")
+            
+            if sub_puestos.empty:
                 st.info("No hay puestos asignados en la matriz electoral. Se mantiene como iglesia oficial para análisis territorial.")
             else:
                 st.dataframe(
-                    sub[["PUESTO", "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "PRIORIDAD", "ACCION_RECOMENDADA"]]
+                    sub_puestos[["PUESTO", "VOTOS_2026", "VOTOS_2023", "VARIACION_ABSOLUTA", "VARIACION_PORCENTUAL", "PRIORIDAD", "ACCION_RECOMENDADA"]]
                     .sort_values("VOTOS_2026", ascending=False),
                     width="stretch",
                     hide_index=True,
