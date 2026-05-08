@@ -5,3 +5,5 @@ openpyxl
 plotly
 folium
 streamlit-folium
+gspread
+google-auth

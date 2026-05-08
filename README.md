@@ -91,3 +91,38 @@ password = "KennedyMira2026!"
 ```
 
 Si no configuras `[auth]`, el tablero abre sin login.
+
+## Base simple con Google Sheets
+
+Para que los cambios guardados en la app online no se pierdan al reiniciar Streamlit Cloud, configura una hoja de Google Sheets como base de ajustes.
+
+1. Crea un Google Sheet vacío.
+2. Crea una cuenta de servicio en Google Cloud y descarga su JSON.
+3. Comparte el Google Sheet con el `client_email` de la cuenta de servicio con permiso de editor.
+4. En Streamlit Cloud, agrega estos Secrets:
+
+```toml
+[google_sheets]
+spreadsheet_id = "ID_DEL_GOOGLE_SHEET"
+
+[gcp_service_account]
+type = "service_account"
+project_id = "..."
+private_key_id = "..."
+private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+client_email = "cuenta-servicio@proyecto.iam.gserviceaccount.com"
+client_id = "..."
+auth_uri = "https://accounts.google.com/o/oauth2/auth"
+token_uri = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url = "..."
+```
+
+La app crea automáticamente dos pestañas en la hoja:
+
+```text
+ajustes_actuales
+ajustes_historial
+```
+
+Si Google Sheets no está configurado, el dashboard usa SQLite local como respaldo.

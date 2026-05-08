@@ -280,6 +280,10 @@ if not check_password():
 
 AJUSTES_FILE = DATA_DIR / "ajustes_guardados.json"
 AJUSTES_DB_FILE = DATA_DIR / "ajustes_territoriales.db"
+GOOGLE_SHEETS_ACTUALES = "ajustes_actuales"
+GOOGLE_SHEETS_HISTORIAL = "ajustes_historial"
+AJUSTES_ACTUALES_COLUMNS = ["entidad", "entidad_id", "nombre_entidad", "templo_actual", "usuario", "motivo", "actualizado_en"]
+AJUSTES_HISTORIAL_COLUMNS = ["id", "creado_en", "entidad", "entidad_id", "nombre_entidad", "templo_anterior", "templo_nuevo", "usuario", "motivo"]
 
 def cargar_ajustes_guardados():
     if AJUSTES_FILE.exists():
@@ -330,7 +334,139 @@ def get_db_connection():
     return conn
 
 
-def init_ajustes_db():
+def _empty_ajustes_actuales_df():
+    return pd.DataFrame(columns=AJUSTES_ACTUALES_COLUMNS)
+
+
+def _empty_historial_ajustes_df():
+    return pd.DataFrame(columns=AJUSTES_HISTORIAL_COLUMNS)
+
+
+def _normalize_sheet_df(df, columns):
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    out = df.copy()
+    for col in columns:
+        if col not in out.columns:
+            out[col] = ""
+    return out[columns].fillna("")
+
+
+def _google_sheets_config():
+    try:
+        sheets_cfg = st.secrets.get("google_sheets", {})
+        service_account = st.secrets.get("gcp_service_account", {})
+    except Exception:
+        return None
+
+    spreadsheet_id = str(sheets_cfg.get("spreadsheet_id", "")).strip() if sheets_cfg else ""
+    if not spreadsheet_id or not service_account:
+        return None
+
+    service_account_info = dict(service_account)
+    if "private_key" in service_account_info:
+        service_account_info["private_key"] = str(service_account_info["private_key"]).replace("\\n", "\n")
+    return spreadsheet_id, service_account_info
+
+
+@st.cache_resource(show_spinner=False)
+def _get_google_spreadsheet():
+    cfg = _google_sheets_config()
+    if not cfg:
+        return None
+
+    spreadsheet_id, service_account_info = cfg
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    credentials = Credentials.from_service_account_info(service_account_info, scopes=scopes)
+    client = gspread.authorize(credentials)
+    return client.open_by_key(spreadsheet_id)
+
+
+def _get_or_create_worksheet(spreadsheet, title, columns):
+    try:
+        worksheet = spreadsheet.worksheet(title)
+    except Exception:
+        worksheet = spreadsheet.add_worksheet(title=title, rows=1000, cols=max(len(columns), 8))
+
+    values = worksheet.get_all_values()
+    if not values:
+        worksheet.append_row(columns, value_input_option="USER_ENTERED")
+    elif values[0] != columns:
+        for idx, col in enumerate(columns, start=1):
+            worksheet.update_cell(1, idx, col)
+    return worksheet
+
+
+def _init_google_sheets_storage():
+    spreadsheet = _get_google_spreadsheet()
+    if spreadsheet is None:
+        return False
+    _get_or_create_worksheet(spreadsheet, GOOGLE_SHEETS_ACTUALES, AJUSTES_ACTUALES_COLUMNS)
+    _get_or_create_worksheet(spreadsheet, GOOGLE_SHEETS_HISTORIAL, AJUSTES_HISTORIAL_COLUMNS)
+    return True
+
+
+def _google_sheets_ready():
+    if not _google_sheets_config():
+        return False
+    if "google_sheets_ready" not in st.session_state:
+        try:
+            st.session_state["google_sheets_ready"] = bool(_init_google_sheets_storage())
+            st.session_state.pop("google_sheets_error", None)
+        except Exception as exc:
+            st.session_state["google_sheets_ready"] = False
+            st.session_state["google_sheets_error"] = str(exc)
+    return bool(st.session_state.get("google_sheets_ready"))
+
+
+def persistence_backend_label():
+    if _google_sheets_ready():
+        return "Google Sheets online"
+    if _google_sheets_config() and st.session_state.get("google_sheets_error"):
+        return "SQLite local (Google Sheets no conectado)"
+    return "SQLite local"
+
+
+def _read_google_sheet_df(title, columns):
+    spreadsheet = _get_google_spreadsheet()
+    worksheet = _get_or_create_worksheet(spreadsheet, title, columns)
+    records = worksheet.get_all_records(default_blank="")
+    return _normalize_sheet_df(pd.DataFrame(records), columns)
+
+
+def _rewrite_google_sheet_df(title, columns, df):
+    spreadsheet = _get_google_spreadsheet()
+    worksheet = _get_or_create_worksheet(spreadsheet, title, columns)
+    clean_df = _normalize_sheet_df(df, columns).astype(str)
+    rows = clean_df.values.tolist()
+    worksheet.clear()
+    worksheet.append_row(columns, value_input_option="USER_ENTERED")
+    if rows:
+        worksheet.append_rows(rows, value_input_option="USER_ENTERED")
+
+
+def _append_google_sheet_row(title, columns, row):
+    spreadsheet = _get_google_spreadsheet()
+    worksheet = _get_or_create_worksheet(spreadsheet, title, columns)
+    worksheet.append_row([str(row.get(col, "") or "") for col in columns], value_input_option="USER_ENTERED")
+
+
+def _next_historial_id(historial_df):
+    if historial_df.empty or "id" not in historial_df.columns:
+        return 1
+    current_max = pd.to_numeric(historial_df["id"], errors="coerce").max()
+    if pd.isna(current_max):
+        return 1
+    return int(current_max) + 1
+
+
+def _init_ajustes_sqlite():
     with get_db_connection() as conn:
         conn.execute(
             """
@@ -365,7 +501,13 @@ def init_ajustes_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_historial_entidad_id ON ajustes_historial(entidad, entidad_id)")
 
 
-def cargar_ajustes_desde_db():
+def init_ajustes_db():
+    _init_ajustes_sqlite()
+    if _google_sheets_config():
+        _google_sheets_ready()
+
+
+def _cargar_ajustes_desde_sqlite():
     ajustes = {"ajustes_asignacion": {}, "ajustes_mesas": {}, "ajustes_actividades": {}}
     with get_db_connection() as conn:
         rows = conn.execute("SELECT entidad, entidad_id, templo_actual FROM ajustes_actuales").fetchall()
@@ -378,7 +520,28 @@ def cargar_ajustes_desde_db():
     return ajustes
 
 
-def registrar_ajuste_en_db(session_key, entity_id, nombre_entidad, templo_nuevo, motivo=""):
+def _cargar_ajustes_desde_google_sheets():
+    ajustes = {"ajustes_asignacion": {}, "ajustes_mesas": {}, "ajustes_actividades": {}}
+    rows = _read_google_sheet_df(GOOGLE_SHEETS_ACTUALES, AJUSTES_ACTUALES_COLUMNS)
+    for _, row in rows.iterrows():
+        session_key = _entidad_to_session_key(row["entidad"])
+        if not session_key:
+            continue
+        key = _normalize_entity_id(row["entidad"], row["entidad_id"])
+        ajustes[session_key][key] = row["templo_actual"]
+    return ajustes
+
+
+def cargar_ajustes_desde_db():
+    if _google_sheets_ready():
+        try:
+            return _cargar_ajustes_desde_google_sheets()
+        except Exception as exc:
+            st.session_state["google_sheets_error"] = str(exc)
+    return _cargar_ajustes_desde_sqlite()
+
+
+def _registrar_ajuste_sqlite(session_key, entity_id, nombre_entidad, templo_nuevo, motivo=""):
     entidad = _session_key_to_entidad(session_key)
     entidad_id = str(_normalize_entity_id(entidad, entity_id))
     usuario = st.session_state.get("usuario_actual", "usuario_dashboard")
@@ -416,7 +579,61 @@ def registrar_ajuste_en_db(session_key, entity_id, nombre_entidad, templo_nuevo,
     return True, templo_anterior
 
 
-def limpiar_ajustes_en_db(session_key, motivo=""):
+def _registrar_ajuste_google_sheets(session_key, entity_id, nombre_entidad, templo_nuevo, motivo=""):
+    entidad = _session_key_to_entidad(session_key)
+    entidad_id = str(_normalize_entity_id(entidad, entity_id))
+    usuario = st.session_state.get("usuario_actual", "usuario_dashboard")
+    now = _ahora_utc_iso()
+
+    actuales = _read_google_sheet_df(GOOGLE_SHEETS_ACTUALES, AJUSTES_ACTUALES_COLUMNS)
+    historial = _read_google_sheet_df(GOOGLE_SHEETS_HISTORIAL, AJUSTES_HISTORIAL_COLUMNS)
+    match = actuales["entidad"].astype(str).eq(entidad) & actuales["entidad_id"].astype(str).eq(entidad_id)
+    templo_anterior = actuales.loc[match, "templo_actual"].iloc[0] if match.any() else None
+    if str(templo_anterior or "") == str(templo_nuevo):
+        return False, templo_anterior
+
+    nueva_fila = {
+        "entidad": entidad,
+        "entidad_id": entidad_id,
+        "nombre_entidad": str(nombre_entidad or ""),
+        "templo_actual": str(templo_nuevo),
+        "usuario": usuario,
+        "motivo": str(motivo or ""),
+        "actualizado_en": now,
+    }
+    actuales = actuales.loc[~match].copy()
+    actuales = pd.concat([actuales, pd.DataFrame([nueva_fila])], ignore_index=True)
+
+    historial_row = {
+        "id": _next_historial_id(historial),
+        "creado_en": now,
+        "entidad": entidad,
+        "entidad_id": entidad_id,
+        "nombre_entidad": str(nombre_entidad or ""),
+        "templo_anterior": templo_anterior or "",
+        "templo_nuevo": str(templo_nuevo),
+        "usuario": usuario,
+        "motivo": str(motivo or ""),
+    }
+    _rewrite_google_sheet_df(GOOGLE_SHEETS_ACTUALES, AJUSTES_ACTUALES_COLUMNS, actuales)
+    _append_google_sheet_row(GOOGLE_SHEETS_HISTORIAL, AJUSTES_HISTORIAL_COLUMNS, historial_row)
+    return True, templo_anterior
+
+
+def registrar_ajuste_en_db(session_key, entity_id, nombre_entidad, templo_nuevo, motivo=""):
+    if _google_sheets_ready():
+        try:
+            changed, templo_anterior = _registrar_ajuste_google_sheets(session_key, entity_id, nombre_entidad, templo_nuevo, motivo)
+            if changed:
+                _registrar_ajuste_sqlite(session_key, entity_id, nombre_entidad, templo_nuevo, motivo)
+            return changed, templo_anterior
+        except Exception as exc:
+            st.session_state["google_sheets_error"] = str(exc)
+            st.warning("No se pudo guardar en Google Sheets. Se guardará una copia local en SQLite.")
+    return _registrar_ajuste_sqlite(session_key, entity_id, nombre_entidad, templo_nuevo, motivo)
+
+
+def _limpiar_ajustes_sqlite(session_key, motivo=""):
     entidad = _session_key_to_entidad(session_key)
     usuario = st.session_state.get("usuario_actual", "usuario_dashboard")
     now = _ahora_utc_iso()
@@ -437,7 +654,52 @@ def limpiar_ajustes_en_db(session_key, motivo=""):
     return len(actuales)
 
 
-def obtener_historial_ajustes(limit=300):
+def _limpiar_ajustes_google_sheets(session_key, motivo=""):
+    entidad = _session_key_to_entidad(session_key)
+    usuario = st.session_state.get("usuario_actual", "usuario_dashboard")
+    now = _ahora_utc_iso()
+    actuales = _read_google_sheet_df(GOOGLE_SHEETS_ACTUALES, AJUSTES_ACTUALES_COLUMNS)
+    historial = _read_google_sheet_df(GOOGLE_SHEETS_HISTORIAL, AJUSTES_HISTORIAL_COLUMNS)
+    match = actuales["entidad"].astype(str).eq(entidad)
+    rows_to_clear = actuales.loc[match].copy()
+    next_id = _next_historial_id(historial)
+
+    for _, row in rows_to_clear.iterrows():
+        _append_google_sheet_row(
+            GOOGLE_SHEETS_HISTORIAL,
+            AJUSTES_HISTORIAL_COLUMNS,
+            {
+                "id": next_id,
+                "creado_en": now,
+                "entidad": entidad,
+                "entidad_id": row.get("entidad_id", ""),
+                "nombre_entidad": row.get("nombre_entidad", ""),
+                "templo_anterior": row.get("templo_actual", ""),
+                "templo_nuevo": "",
+                "usuario": usuario,
+                "motivo": str(motivo or "limpieza masiva"),
+            },
+        )
+        next_id += 1
+
+    actuales = actuales.loc[~match].copy()
+    _rewrite_google_sheet_df(GOOGLE_SHEETS_ACTUALES, AJUSTES_ACTUALES_COLUMNS, actuales)
+    return len(rows_to_clear)
+
+
+def limpiar_ajustes_en_db(session_key, motivo=""):
+    if _google_sheets_ready():
+        try:
+            total = _limpiar_ajustes_google_sheets(session_key, motivo)
+            _limpiar_ajustes_sqlite(session_key, motivo)
+            return total
+        except Exception as exc:
+            st.session_state["google_sheets_error"] = str(exc)
+            st.warning("No se pudo limpiar Google Sheets. Se aplicará la limpieza local en SQLite.")
+    return _limpiar_ajustes_sqlite(session_key, motivo)
+
+
+def _obtener_historial_sqlite(limit=300):
     with get_db_connection() as conn:
         rows = conn.execute(
             """
@@ -449,23 +711,24 @@ def obtener_historial_ajustes(limit=300):
             (int(limit),),
         ).fetchall()
     if not rows:
-        return pd.DataFrame(
-            columns=[
-                "id",
-                "creado_en",
-                "entidad",
-                "entidad_id",
-                "nombre_entidad",
-                "templo_anterior",
-                "templo_nuevo",
-                "usuario",
-                "motivo",
-            ]
-        )
+        return _empty_historial_ajustes_df()
     return pd.DataFrame([dict(r) for r in rows])
 
 
-def obtener_ajustes_actuales_df(entidad=None):
+def obtener_historial_ajustes(limit=300):
+    if _google_sheets_ready():
+        try:
+            historial = _read_google_sheet_df(GOOGLE_SHEETS_HISTORIAL, AJUSTES_HISTORIAL_COLUMNS)
+            if historial.empty:
+                return _empty_historial_ajustes_df()
+            historial["id_sort"] = pd.to_numeric(historial["id"], errors="coerce").fillna(0)
+            return historial.sort_values("id_sort", ascending=False).drop(columns=["id_sort"]).head(int(limit)).reset_index(drop=True)
+        except Exception as exc:
+            st.session_state["google_sheets_error"] = str(exc)
+    return _obtener_historial_sqlite(limit)
+
+
+def _obtener_ajustes_actuales_sqlite(entidad=None):
     where = ""
     params = ()
     if entidad:
@@ -482,10 +745,22 @@ def obtener_ajustes_actuales_df(entidad=None):
             params,
         ).fetchall()
     if not rows:
-        return pd.DataFrame(
-            columns=["entidad", "entidad_id", "nombre_entidad", "templo_actual", "usuario", "motivo", "actualizado_en"]
-        )
+        return _empty_ajustes_actuales_df()
     return pd.DataFrame([dict(r) for r in rows])
+
+
+def obtener_ajustes_actuales_df(entidad=None):
+    if _google_sheets_ready():
+        try:
+            actuales = _read_google_sheet_df(GOOGLE_SHEETS_ACTUALES, AJUSTES_ACTUALES_COLUMNS)
+            if entidad:
+                actuales = actuales[actuales["entidad"].astype(str).eq(str(entidad))]
+            if actuales.empty:
+                return _empty_ajustes_actuales_df()
+            return actuales.sort_values("actualizado_en", ascending=False).reset_index(drop=True)
+        except Exception as exc:
+            st.session_state["google_sheets_error"] = str(exc)
+    return _obtener_ajustes_actuales_sqlite(entidad)
 
 
 def migrar_ajustes_json_a_db(ajustes_json):
@@ -968,7 +1243,7 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
     Fullscreen(position="topleft").add_to(m)
     MiniMap(toggle_display=True, position="bottomleft").add_to(m)
     agregar_contorno_localidades(m)
-    agregar_heatmap_electoral(m, asignacion_df, show=False, name="Rango de calor votos 2026")
+    agregar_heatmap_electoral(m, asignacion_df, show=True, name="Rango de calor votos 2026")
 
     templos = iglesias_df[iglesias_df["IGLESIA"].isin(TEMPLOS_OFICIALES)].dropna(subset=["LATITUD", "LONGITUD"]).copy()
     templo_coords = {r["IGLESIA"]: (r["LATITUD"], r["LONGITUD"]) for _, r in templos.iterrows()}
@@ -989,8 +1264,8 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
             icon=crear_etiqueta_templo(r["IGLESIA"], color, dx=34, dy=-20),
         ).add_to(templos_layer)
 
-    puestos_layer = folium.FeatureGroup(name="Puestos por templo asignado", show=True)
-    lineas_layer = folium.FeatureGroup(name="Líneas puesto-templo", show=True)
+    puestos_layer = folium.FeatureGroup(name="Puestos por templo asignado", show=False)
+    lineas_layer = folium.FeatureGroup(name="Líneas puesto-templo", show=False)
     for _, r in asignacion_df.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         templo = r.get("TEMPLO_ASIGNADO_FINAL")
         color = COLORES_TEMPLOS.get(templo, "#64748B")
@@ -1350,9 +1625,9 @@ def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general"):
     Fullscreen(position="topleft").add_to(m)
     MiniMap(toggle_display=True, position="bottomleft").add_to(m)
     show_heat_default = map_mode in {"Vista general", "Vista de calor"}
-    show_puestos_default = map_mode in {"Vista general", "Vista de calor", "Vista electoral"}
-    show_acts_default = map_mode in {"Vista general", "Vista operativa"}
-    show_mesas_default = map_mode in {"Vista general", "Vista operativa"}
+    show_puestos_default = map_mode == "Vista electoral"
+    show_acts_default = map_mode == "Vista operativa"
+    show_mesas_default = map_mode == "Vista operativa"
     localidades_gj = cargar_geojson(LOCALIDADES_GEOJSON)
     if localidades_gj:
         agregar_contorno_localidades(m)
@@ -1687,6 +1962,9 @@ for df in [puestos, resumen_iglesia, resumen_puesto, resumen_barrio, matriz, asi
 with st.sidebar:
     st.header("Configuración del análisis")
     st.markdown("Fuente única: `kennedy_mira_consolidado.xlsx`")
+    st.caption(f"Base de cambios: {persistence_backend_label()}")
+    if st.session_state.get("google_sheets_error"):
+        st.warning("Google Sheets está configurado, pero no conectado. Revise credenciales o permisos del archivo.")
 
     iglesias_oficiales = IGLESIAS_OFICIALES_PERMITIDAS
     default_iglesias = iglesias_oficiales
