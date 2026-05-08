@@ -584,17 +584,32 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
         folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
             tooltip=f"Templo oficial: {r['IGLESIA']}",
-            popup=folium.Popup(f"<b>{safe_html(r['IGLESIA'])}</b><br>Lat: {r['LATITUD']}<br>Lon: {r['LONGITUD']}", max_width=260),
+            popup=folium.Popup(
+                f"<b>{safe_html(r['IGLESIA'])}</b><br>Lat: {r['LATITUD']}<br>Lon: {r['LONGITUD']}",
+                max_width=260
+            ),
             icon=folium.DivIcon(
                 html=f'''
                 <div style="
-                    width:20px;
-                    height:20px;
+                    width:30px;
+                    height:30px;
                     border-radius:50%;
                     background:{color};
-                    border:4px solid white;
-                    box-shadow:0 2px 10px rgba(15,23,42,.35);
-                "></div>
+                    border:5px solid #FFFFFF;
+                    box-shadow:
+                        0 0 0 4px {color}33,
+                        0 4px 14px rgba(15,23,42,.35);
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                ">
+                    <div style="
+                        width:9px;
+                        height:9px;
+                        border-radius:50%;
+                        background:#FFFFFF;
+                    "></div>
+                </div>
                 '''
             ),
         ).add_to(templos_layer)
@@ -603,23 +618,23 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
             icon=folium.DivIcon(
                 html=f'''
                 <div style="
-                    transform:translate(20px,-12px);
+                    transform:translate(28px,-13px);
                     background:#FFFFFF;
-                    border:1px solid {color};
+                    border:1.5px solid {color};
                     border-radius:999px;
-                    padding:4px 8px;
+                    padding:5px 10px;
                     color:{color};
-                    font-size:10px;
-                    font-weight:800;
-                    box-shadow:0 1px 6px rgba(15,23,42,.18);
+                    font-size:11px;
+                    font-weight:900;
+                    box-shadow:0 2px 8px rgba(15,23,42,.20);
                     white-space:nowrap;
+                    letter-spacing:-0.01em;
                 ">
                     {safe_html(r["IGLESIA"])}
                 </div>
                 '''
             ),
         ).add_to(templos_layer)
-    templos_layer.add_to(m)
 
     puestos_layer = folium.FeatureGroup(name="Puestos por templo asignado", show=True)
     lineas_layer = folium.FeatureGroup(name="Líneas puesto-templo", show=True)
@@ -646,26 +661,26 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
             folium.PolyLine(
                 locations=[[r["LATITUD"], r["LONGITUD"]], list(templo_coords[templo])],
                 color=color,
-                weight=2.4,
-                opacity=0.58,
-                dash_array="6 6",
+                weight=1.15,
+                opacity=0.32,
                 tooltip=f"{r.get('PUESTO')} → {templo} | {fmt_number(distancia, 2)} km",
             ).add_to(lineas_layer)
             
         folium.CircleMarker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            radius=6.5,
+            radius=5.2,
             color="#FFFFFF",
             fill=True,
             fill_color=color,
-            fill_opacity=0.86,
-            weight=1.6,
+            fill_opacity=0.76,
+            weight=1.2,
             tooltip=f"{r.get('PUESTO')} | {safe_html(r.get('BARRIO'))} | {safe_html(templo)} | {fmt_number(distancia, 2)} km | {fmt_number(r.get('VOTOS_2026'), 0)} votos",
             popup=folium.Popup(popup, max_width=380),
         ).add_to(puestos_layer)
         
     lineas_layer.add_to(m)
     puestos_layer.add_to(m)
+    templos_layer.add_to(m)
 
     legend_items = "".join(
         f'''
@@ -697,7 +712,7 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
         {legend_items}
         <div style="height:1px;background:#E2E8F0;margin:8px 0;"></div>
         <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
-            <span style="width:24px;border-top:2px dashed #64748B;display:inline-block;"></span>
+            <span style="width:24px;border-top:2px solid #64748B;display:inline-block;"></span>
             <span>Línea puesto-templo</span>
         </div>
     </div>
