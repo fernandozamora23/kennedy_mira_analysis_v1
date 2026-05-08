@@ -857,26 +857,35 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     heat_data = valid_heat[["LATITUD", "LONGITUD", "VOTOS_2026"]].values.tolist()
     if heat_data:
         heat_layer = folium.FeatureGroup(name="Calor votos 2026", show=False)
-        HeatMap(heat_data, radius=28, blur=18, min_opacity=0.25, max_val=300, gradient={0.2: '#440154', 0.4: '#3b528b', 0.6: '#21918c', 0.8: '#5ec962', 1.0: '#fde725'}).add_to(heat_layer)
+        HeatMap(heat_data, radius=28, blur=18, min_opacity=0.25, max_val=300, gradient={0.2: '#EFF6FF', 0.4: '#BAE6FD', 0.6: '#3B82F6', 0.8: '#1D4ED8', 1.0: '#1E3A8A'}).add_to(heat_layer)
         heat_layer.add_to(m)
         
         heat_legend_html = """
         <div style="position: fixed; bottom: 45px; left: 190px; z-index:9999; background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(8px); padding:12px 14px; border:1px solid #E2E8F0; border-radius:12px; box-shadow:0 8px 30px rgba(15, 23, 42, 0.08); font-size:12px; width: 185px;">
-        <b style="color:#0F172A; font-family:'Inter', sans-serif;">Intensidad de Votos 2026</b><br>
-        <div style="background: linear-gradient(to right, #440154, #3b528b, #21918c, #5ec962, #fde725); width: 100%; height: 12px; border-radius: 6px; margin: 10px 0;"></div>
+        <b style="color:#0F172A; font-family:'Inter', sans-serif;">Índice Potencial Electoral</b><br>
+        <div style="background: linear-gradient(to right, #EFF6FF, #BAE6FD, #3B82F6, #1D4ED8, #1E3A8A); width: 100%; height: 12px; border-radius: 6px; margin: 10px 0;"></div>
         <div style="display: flex; justify-content: space-between; color:#475569; font-size:10.5px; font-weight:600; font-family:'Inter', sans-serif;">
-            <span>Menos (Azul)<br>0 votos</span>
-            <span style="text-align: right;">Más (Rojo)<br>300+ votos</span>
+            <span>Baja (Azul claro)<br>0 votos</span>
+            <span style="text-align: right;">Alta (Cobalto)<br>300+ votos</span>
         </div>
         </div>
         """
         m.get_root().html.add_child(folium.Element(heat_legend_html))
 
+    # MIRA Logo
+    mira_logo_html = """
+    <div style="position: fixed; top: 15px; left: 60px; z-index:9999; background: rgba(255, 255, 255, 0.85); backdrop-filter: blur(4px); padding: 5px 12px; border-radius: 6px; border: 1px solid #E2E8F0; font-family: 'Inter', sans-serif; font-weight: 900; color: #1E3A8A; font-size: 16px; letter-spacing: 1px; font-style: italic; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+    MIRA
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(mira_logo_html))
+
     # Puestos
-    puestos_layer = folium.FeatureGroup(name="Puestos de votación fijos", show=True)
+    puestos_layer = MarkerCluster(name="Puestos de votación fijos", show=True)
     for _, r in puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         iglesia = r.get("IGLESIA", "")
         color = COLORES_TEMPLOS.get(iglesia, "#64748B")
+        num = r.get("NUM_PUESTO", "")
         puesto = safe_html(r.get("PUESTO", ""))
         iglesia = safe_html(r.get("IGLESIA", ""))
         barrio = safe_html(r.get("BARRIO", ""))
@@ -884,7 +893,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         accion = safe_html(r.get("ACCION_RECOMENDADA", ""))
         popup = f"""
         <div style="font-family:'Inter', sans-serif; width:340px; color:#0F172A;">
-        <h4 style="margin-bottom:12px; font-weight:800; border-bottom: 1px solid #E2E8F0; padding-bottom:8px;">{puesto}</h4>
+        <h4 style="margin-bottom:12px; font-weight:800; border-bottom: 1px solid #E2E8F0; padding-bottom:8px;">#{num} - {puesto}</h4>
         <table style="width:100%; border-collapse: collapse; font-size: 12.5px;">
             <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600; color:#475569;">Iglesia</td><td style="padding:6px 8px; font-weight:700;">{iglesia}</td></tr>
             <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Barrio (UPZ)</td><td style="padding:6px 8px;">{barrio} ({upz})</td></tr>
@@ -897,17 +906,17 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         </div>
         """
         
-        radius = max(5, min(17, float(r.get("VOTOS_2026", 0) or 0) / 14))
-        folium.CircleMarker(
+        icon_html = f"""
+        <div style="background-color: {color}; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; justify-content: center; align-items: center; font-size: 11.5px; font-weight: 800; border: 2.5px solid white; box-shadow: 0 0 10px {color}80, 0 3px 6px rgba(0,0,0,0.16);">
+        {num}
+        </div>
+        """
+
+        folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            radius=radius,
+            icon=folium.DivIcon(html=icon_html),
             popup=folium.Popup(popup, max_width=380),
-            tooltip=f"{r.get('PUESTO','')} | {fmt_number(r.get('VOTOS_2026'),0)} votos",
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.75,
-            weight=1.5,
+            tooltip=f"#{num} - {r.get('PUESTO','')} | {fmt_number(r.get('VOTOS_2026'),0)} votos",
         ).add_to(puestos_layer)
     puestos_layer.add_to(m)
 
@@ -968,29 +977,32 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
 
     # Mesas
     mesas_layer = folium.FeatureGroup(name="Mesas de trabajo", show=True)
-    for _, r in mesas.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
+        icon_html_mesas = """
+        <div style="background-color: #F8FAFC; color: #1E3A8A; border-radius: 50%; width: 20px; height: 20px; display: flex; justify-content: center; align-items: center; font-size: 11px; font-weight: 800; border: 2.5px solid #1E3A8A; box-shadow: 0 2px 4px rgba(0,0,0,0.15);">
+        M
+        </div>
+        """
         folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
             tooltip=f"Mesa | {r.get('IGLESIA','')} | {r.get('BARRIO','')}",
             popup=folium.Popup(
                 f"""
-                <div style="font-family:Arial; width:300px;">
-                <b>Mesa:</b> {safe_html(r.get('TEMA',''))}<br>
-                <b>Templo asignado:</b> {safe_html(r.get('IGLESIA',''))}<br>
-                <b>Templo original:</b> {safe_html(r.get('IGLESIA_ORIGINAL',''))}<br>
-                <b>Barrio:</b> {safe_html(r.get('BARRIO',''))}<br>
-                <b>Líder:</b> {safe_html(r.get('LIDER',''))}<br>
-                <b>Concejal:</b> {safe_html(r.get('CONCEJAL',''))}<br>
-                <b>Beneficiarios:</b> {fmt_number(r.get('BENEFICIARIOS'),0)}<br>
-                <b>Compromisos:</b> {fmt_number(r.get('COMPROMISOS_TOTAL'),0)}<br>
-                <b>Estado:</b> {safe_html(r.get('ESTADO',''))}<br>
-                <b>Dirección:</b> {safe_html(r.get('DIRECCION',''))}<br>
-                <b>Observaciones:</b> {safe_html(r.get('OBSERVACIONES',''))}
+                <div style="font-family:'Inter', sans-serif; width:300px; color:#0F172A;">
+                <h4 style="margin-bottom:12px; font-weight:800; border-bottom: 1px solid #E2E8F0; padding-bottom:8px;">Mesa: {safe_html(r.get('TEMA',''))}</h4>
+                <table style="width:100%; border-collapse: collapse; font-size: 12.5px;">
+                    <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600; color:#475569;">Templo asignado</td><td style="padding:6px 8px; font-weight:700;">{safe_html(r.get('IGLESIA',''))}</td></tr>
+                    <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Barrio</td><td style="padding:6px 8px;">{safe_html(r.get('BARRIO',''))}</td></tr>
+                    <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600; color:#475569;">Líder</td><td style="padding:6px 8px;">{safe_html(r.get('LIDER',''))}</td></tr>
+                    <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Concejal</td><td style="padding:6px 8px;">{safe_html(r.get('CONCEJAL',''))}</td></tr>
+                    <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600; color:#475569;">Beneficiarios</td><td style="padding:6px 8px; font-weight:800; color:#2563EB;">{fmt_number(r.get('BENEFICIARIOS'),0)}</td></tr>
+                    <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Compromisos</td><td style="padding:6px 8px;">{fmt_number(r.get('COMPROMISOS_TOTAL'),0)}</td></tr>
+                    <tr style="background:#FEF2F2;"><td style="padding:6px 8px; font-weight:600; color:#991B1B;">Estado</td><td style="padding:6px 8px; font-weight:700; color:#991B1B;">{safe_html(r.get('ESTADO',''))}</td></tr>
+                </table>
                 </div>
                 """,
                 max_width=360,
             ),
-            icon=folium.Icon(color="orange", icon="info-sign"),
+            icon=folium.DivIcon(html=icon_html_mesas),
         ).add_to(mesas_layer)
     mesas_layer.add_to(m)
 
@@ -1467,8 +1479,25 @@ with tab_mapa:
         ajustes_operativos = len(st.session_state.get("ajustes_actividades", {})) + len(st.session_state.get("ajustes_mesas", {}))
         metric_card("Ajustes operativos", fmt_number(ajustes_operativos, 0), icon="⚙️")
 
+    puestos_mapa = puestos_mapa.reset_index(drop=True)
+    puestos_mapa["NUM_PUESTO"] = puestos_mapa.index + 1
+
     mapa = crear_mapa(puestos_mapa, iglesias_mapa, acts_mapa, mesas_mapa)
-    st_folium(mapa, width=None, height=720)
+    
+    mcol1, mcol2 = st.columns([3, 1])
+    with mcol1:
+        st_folium(mapa, width=None, height=720)
+    with mcol2:
+        st.markdown("<div style='font-family:Inter, sans-serif; font-weight:800; font-size:1.15rem; margin-bottom:1rem; color:#0F172A;'>Relación de Puestos</div>", unsafe_allow_html=True)
+        df_leyenda = puestos_mapa.dropna(subset=["LATITUD", "LONGITUD"])[["NUM_PUESTO", "PUESTO"]].rename(columns={"NUM_PUESTO": "#", "PUESTO": "Nombre del Puesto"})
+        
+        # Streamlit dataframe with basic styling
+        st.dataframe(
+            df_leyenda.style.set_properties(**{'background-color': '#F8FAFC', 'color': '#0F172A', 'font-family': 'Inter'}), 
+            hide_index=True, 
+            height=650, 
+            use_container_width=True
+        )
 
     with st.expander("Ajustar templo de una mesa de trabajo", expanded=False):
         st.caption("Ajuste definitivo para modificar la asignación. No modifica el Excel maestro directamente pero sí los reportes exportables.")
