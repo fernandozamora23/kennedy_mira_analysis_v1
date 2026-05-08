@@ -16,7 +16,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import folium
 from folium.plugins import HeatMap, Fullscreen, MiniMap
-from streamlit_folium import st_folium
+from streamlit_folium import folium_static, st_folium
 
 # ============================================================
 # CONFIGURACIÓN
@@ -1239,13 +1239,7 @@ def agregar_heatmap_electoral(mapa, puestos_df, show=True, name="Rango de calor 
 
 
 def render_folium_map(mapa, height=760, key=None):
-    st_folium(
-        mapa,
-        height=height,
-        use_container_width=True,
-        returned_objects=[],
-        key=key,
-    )
+    folium_static(mapa, width=1600, height=height)
 
 
 def crear_mapa_asignacion(asignacion_df, iglesias_df, layers_config=None):
