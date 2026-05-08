@@ -884,12 +884,15 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     puestos_layer = folium.FeatureGroup(name="Puestos de votación fijos", show=True)
     for _, r in puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         iglesia = r.get("IGLESIA", "")
-        color = COLORES_TEMPLOS.get(iglesia, "#64748B")
+        color_templo = COLORES_TEMPLOS.get(iglesia, "#64748B")
         puesto = safe_html(r.get("PUESTO", ""))
         iglesia = safe_html(r.get("IGLESIA", ""))
         barrio = safe_html(r.get("BARRIO", ""))
         upz = safe_html(r.get("UPZ", ""))
         accion = safe_html(r.get("ACCION_RECOMENDADA", ""))
+        votos = float(r.get("VOTOS_2026", 0) or 0)
+        radius = max(4, min(10, 4 + math.sqrt(votos) / 3))
+
         popup = f"""
         <div style="font-family:'Inter', sans-serif; width:340px; color:#0F172A;">
         <h4 style="margin-bottom:12px; font-weight:800; border-bottom: 1px solid #E2E8F0; padding-bottom:8px;">{puesto}</h4>
@@ -901,48 +904,68 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
             <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600; color:#475569;">Actividades</td><td style="padding:6px 8px;">{fmt_number(r.get('ACTIVIDADES_CAMPANA'),0)}</td></tr>
             <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Mesas de trabajo</td><td style="padding:6px 8px;">{fmt_number(r.get('MESAS_TRABAJO_BARRIO'),0)}</td></tr>
             <tr style="background:#FEF2F2;"><td style="padding:6px 8px; font-weight:600; color:#991B1B;">Prioridad</td><td style="padding:6px 8px; font-weight:700; color:#991B1B;">{safe_html(r.get('PRIORIDAD',''))}</td></tr>
+            <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Acción</td><td style="padding:6px 8px;">{accion}</td></tr>
         </table>
         </div>
         """
         
-        radius = max(5, min(17, float(r.get("VOTOS_2026", 0) or 0) / 14))
         folium.CircleMarker(
             location=[r["LATITUD"], r["LONGITUD"]],
             radius=radius,
-            popup=folium.Popup(popup, max_width=380),
-            tooltip=f"{r.get('PUESTO','')} | {fmt_number(r.get('VOTOS_2026'),0)} votos",
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.75,
+            color="#FFFFFF",
             weight=1.5,
+            fill=True,
+            fill_color=color_templo,
+            fill_opacity=0.78,
+            popup=folium.Popup(popup, max_width=380),
+            tooltip=f"{r.get('PUESTO','')} | {r.get('IGLESIA','')} | {fmt_number(r.get('VOTOS_2026'),0)} votos",
         ).add_to(puestos_layer)
     puestos_layer.add_to(m)
 
     # Churches
     iglesia_layer = folium.FeatureGroup(name="Iglesias / templos", show=True)
     for _, r in iglesias.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
-        url = r.get("URL", "")
-        link = f'<br><a href="{url}" target="_blank">Ver ubicación IDMJI</a>' if isinstance(url, str) and url else ""
+        color = COLORES_TEMPLOS.get(r["IGLESIA"], "#334155")
         folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
+            tooltip=f"Templo oficial: {r.get('IGLESIA','')}",
             popup=folium.Popup(
-                f"<b>{safe_html(r.get('IGLESIA',''))}</b><br>Lat: {r['LATITUD']}<br>Lon: {r['LONGITUD']}{link}",
+                f"<b>{safe_html(r.get('IGLESIA',''))}</b><br>Lat: {r['LATITUD']}<br>Lon: {r['LONGITUD']}",
                 max_width=280,
             ),
-            tooltip=f"Iglesia: {r.get('IGLESIA','')}",
-            icon=folium.Icon(color="purple", icon="home", prefix="fa"),
+            icon=folium.DivIcon(
+                html=f'''
+                <div style="
+                    width:18px;
+                    height:18px;
+                    border-radius:50%;
+                    background:{color};
+                    border:3px solid white;
+                    box-shadow:0 2px 8px rgba(15,23,42,.35);
+                "></div>
+                '''
+            ),
         ).add_to(iglesia_layer)
+
         folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
             icon=folium.DivIcon(
-                html=f"""
-                <div style="transform:translate(18px,-8px);background:#FFFFFF;border:1px solid #DDD6FE;
-                border-radius:8px;padding:3px 7px;color:#4C1D95;font-size:11px;font-weight:800;
-                box-shadow:0 1px 5px rgba(15,23,42,.18);white-space:nowrap;">
-                {safe_html(r.get('IGLESIA',''))}
+                html=f'''
+                <div style="
+                    transform:translate(18px,-12px);
+                    background:#FFFFFF;
+                    border:1px solid {color};
+                    border-radius:999px;
+                    padding:4px 8px;
+                    color:{color};
+                    font-size:10px;
+                    font-weight:800;
+                    box-shadow:0 1px 6px rgba(15,23,42,.18);
+                    white-space:nowrap;
+                ">
+                    {safe_html(r.get('IGLESIA',''))}
                 </div>
-                """
+                '''
             ),
         ).add_to(iglesia_layer)
     iglesia_layer.add_to(m)
@@ -950,78 +973,107 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     # Activities
     acts_layer = folium.FeatureGroup(name="Actividades de campaña", show=False)
     for _, r in actividades.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
+        popup_actividad = f"""
+        <div style="font-family:'Inter', sans-serif; width:280px; color:#0F172A;">
+        <h4 style="margin-bottom:12px; font-weight:800; border-bottom: 1px solid #E2E8F0; padding-bottom:8px;">Actividad: {safe_html(r.get('TIPO_ACTIVIDAD',''))}</h4>
+        <table style="width:100%; border-collapse: collapse; font-size: 12px;">
+            <tr style="background:#F8FAFC;"><td style="padding:4px 8px; font-weight:600;">Templo asignado</td><td style="padding:4px 8px;">{safe_html(r.get('IGLESIA',''))}</td></tr>
+            <tr><td style="padding:4px 8px; font-weight:600;">Barrio</td><td style="padding:4px 8px;">{safe_html(r.get('BARRIO',''))}</td></tr>
+            <tr style="background:#F8FAFC;"><td style="padding:4px 8px; font-weight:600;">Líder</td><td style="padding:4px 8px;">{safe_html(r.get('LIDER',''))}</td></tr>
+            <tr><td style="padding:4px 8px; font-weight:600;">Dirección</td><td style="padding:4px 8px;">{safe_html(r.get('DIRECCION',''))}</td></tr>
+        </table>
+        </div>
+        """
         folium.CircleMarker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            radius=4,
-            color="blue",
+            radius=3.5,
+            color="#2563EB",
+            weight=1,
             fill=True,
-            fill_opacity=0.6,
+            fill_color="#2563EB",
+            fill_opacity=0.35,
             tooltip=f"{r.get('TIPO_ACTIVIDAD','')} | {r.get('IGLESIA','')}",
-            popup=folium.Popup(
-                f"""
-                <div style="font-family:Arial; width:280px;">
-                <b>Actividad:</b> {safe_html(r.get('TIPO_ACTIVIDAD',''))}<br>
-                <b>Templo asignado:</b> {safe_html(r.get('IGLESIA',''))}<br>
-                <b>Templo original:</b> {safe_html(r.get('IGLESIA_ORIGINAL',''))}<br>
-                <b>Barrio:</b> {safe_html(r.get('BARRIO',''))}<br>
-                <b>Líder:</b> {safe_html(r.get('LIDER',''))}<br>
-                <b>Dirección:</b> {safe_html(r.get('DIRECCION',''))}<br>
-                <b>Observaciones:</b> {safe_html(r.get('OBSERVACIONES',''))}
-                </div>
-                """,
-                max_width=340,
-            ),
+            popup=folium.Popup(popup_actividad, max_width=340),
         ).add_to(acts_layer)
     acts_layer.add_to(m)
 
     # Mesas
     mesas_layer = folium.FeatureGroup(name="Mesas de trabajo", show=True)
     for _, r in mesas.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
-        icon_html_mesas = """
-        <div style="background-color: #F8FAFC; color: #1E3A8A; border-radius: 50%; width: 20px; height: 20px; display: flex; justify-content: center; align-items: center; font-size: 11px; font-weight: 800; border: 2.5px solid #1E3A8A; box-shadow: 0 2px 4px rgba(0,0,0,0.15);">
-        M
+        popup_mesa = f"""
+        <div style="font-family:'Inter', sans-serif; width:300px; color:#0F172A;">
+        <h4 style="margin-bottom:12px; font-weight:800; border-bottom: 1px solid #E2E8F0; padding-bottom:8px;">Mesa: {safe_html(r.get('TEMA',''))}</h4>
+        <table style="width:100%; border-collapse: collapse; font-size: 12.5px;">
+            <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600;">Templo asignado</td><td style="padding:6px 8px; font-weight:700;">{safe_html(r.get('IGLESIA',''))}</td></tr>
+            <tr><td style="padding:6px 8px; font-weight:600;">Barrio</td><td style="padding:6px 8px;">{safe_html(r.get('BARRIO',''))}</td></tr>
+            <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600;">Líder</td><td style="padding:6px 8px;">{safe_html(r.get('LIDER',''))}</td></tr>
+            <tr><td style="padding:6px 8px; font-weight:600;">Concejal</td><td style="padding:6px 8px;">{safe_html(r.get('CONCEJAL',''))}</td></tr>
+            <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600;">Beneficiarios</td><td style="padding:6px 8px; font-weight:800; color:#2563EB;">{fmt_number(r.get('BENEFICIARIOS'),0)}</td></tr>
+            <tr><td style="padding:6px 8px; font-weight:600;">Estado</td><td style="padding:6px 8px; font-weight:700; color:#991B1B;">{safe_html(r.get('ESTADO',''))}</td></tr>
+        </table>
         </div>
         """
-        folium.Marker(
+        folium.CircleMarker(
             location=[r["LATITUD"], r["LONGITUD"]],
+            radius=5.5,
+            color="#FFFFFF",
+            weight=1.3,
+            fill=True,
+            fill_color="#F97316",
+            fill_opacity=0.70,
             tooltip=f"Mesa | {r.get('IGLESIA','')} | {r.get('BARRIO','')}",
-            popup=folium.Popup(
-                f"""
-                <div style="font-family:'Inter', sans-serif; width:300px; color:#0F172A;">
-                <h4 style="margin-bottom:12px; font-weight:800; border-bottom: 1px solid #E2E8F0; padding-bottom:8px;">Mesa: {safe_html(r.get('TEMA',''))}</h4>
-                <table style="width:100%; border-collapse: collapse; font-size: 12.5px;">
-                    <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600; color:#475569;">Templo asignado</td><td style="padding:6px 8px; font-weight:700;">{safe_html(r.get('IGLESIA',''))}</td></tr>
-                    <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Barrio</td><td style="padding:6px 8px;">{safe_html(r.get('BARRIO',''))}</td></tr>
-                    <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600; color:#475569;">Líder</td><td style="padding:6px 8px;">{safe_html(r.get('LIDER',''))}</td></tr>
-                    <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Concejal</td><td style="padding:6px 8px;">{safe_html(r.get('CONCEJAL',''))}</td></tr>
-                    <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600; color:#475569;">Beneficiarios</td><td style="padding:6px 8px; font-weight:800; color:#2563EB;">{fmt_number(r.get('BENEFICIARIOS'),0)}</td></tr>
-                    <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Compromisos</td><td style="padding:6px 8px;">{fmt_number(r.get('COMPROMISOS_TOTAL'),0)}</td></tr>
-                    <tr style="background:#FEF2F2;"><td style="padding:6px 8px; font-weight:600; color:#991B1B;">Estado</td><td style="padding:6px 8px; font-weight:700; color:#991B1B;">{safe_html(r.get('ESTADO',''))}</td></tr>
-                </table>
-                </div>
-                """,
-                max_width=360,
-            ),
-            icon=folium.DivIcon(html=icon_html_mesas),
+            popup=folium.Popup(popup_mesa, max_width=360),
         ).add_to(mesas_layer)
     mesas_layer.add_to(m)
 
-    upz_legend = '<span style="color:#2563EB;">■</span> UPZ Kennedy<br>' if upz_gj else ""
     legend_items = "".join(
-        f'<br><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{color};margin-right:6px;"></span>Puesto ({templo})'
+        f'''
+        <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
+            <span style="width:10px;height:10px;border-radius:50%;background:{color};display:inline-block;"></span>
+            <span>Puesto ({templo})</span>
+        </div>
+        '''
         for templo, color in COLORES_TEMPLOS.items()
     )
-    legend_html = f"""
-    <div style="position: fixed; bottom: 35px; right: 35px; z-index:9999; background:white; padding:12px 14px; border:1px solid #CBD5E1; border-radius:10px; box-shadow:0 3px 12px rgba(0,0,0,.12); font-size:13px;">
-    <b>Lectura del mapa</b>{legend_items}<br>
-    <span style="color:gray;">●</span> Puesto (otro templo)<br>
-    <span style="color:purple;">⬟</span> Iglesia / templo<br>
-    <span style="color:blue;">●</span> Actividad de campaña<br>
-    <span style="color:orange;">⬟</span> Mesa de trabajo<br>
-    <span style="color:#94A3B8;">■</span> Otras localidades<br>
-    {upz_legend}
+
+    legend_html = f'''
+    <div style="
+        position: fixed;
+        bottom: 35px;
+        right: 35px;
+        z-index:9999;
+        background:white;
+        padding:12px 14px;
+        border:1px solid #CBD5E1;
+        border-radius:12px;
+        box-shadow:0 4px 14px rgba(15,23,42,.16);
+        font-size:12px;
+        color:#0F172A;
+        min-width:210px;
+        font-family: 'Inter', sans-serif;
+    ">
+        <div style="font-weight:900;margin-bottom:7px;">Lectura del mapa</div>
+        {legend_items}
+        <div style="height:1px;background:#E2E8F0;margin:8px 0;"></div>
+        <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
+            <span style="width:14px;height:14px;border-radius:50%;background:#FFFFFF;border:4px solid #0F172A;display:inline-block;"></span>
+            <span>Templo oficial</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
+            <span style="width:10px;height:10px;border-radius:50%;background:#2563EB;opacity:.55;display:inline-block;"></span>
+            <span>Actividad de campaña</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
+            <span style="width:10px;height:10px;border-radius:50%;background:#F97316;display:inline-block;"></span>
+            <span>Mesa de trabajo</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
+            <span style="width:10px;height:10px;background:#94A3B8;opacity:.5;display:inline-block;"></span>
+            <span>Otras localidades</span>
+        </div>
     </div>
-    """
+    '''
+
     m.get_root().html.add_child(folium.Element(legend_html))
     folium.LayerControl(collapsed=False).add_to(m)
     return m
