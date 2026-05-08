@@ -915,8 +915,8 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     valid_heat = puestos.dropna(subset=["LATITUD", "LONGITUD", "VOTOS_2026"]).copy()
     heat_data = valid_heat[["LATITUD", "LONGITUD", "VOTOS_2026"]].values.tolist()
     if heat_data:
-        heat_layer = folium.FeatureGroup(name="Calor votos 2026", show=False)
-        HeatMap(heat_data, radius=28, blur=18, min_opacity=0.25, max_val=300, gradient={0.2: '#EFF6FF', 0.4: '#BAE6FD', 0.6: '#3B82F6', 0.8: '#1D4ED8', 1.0: '#1E3A8A'}).add_to(heat_layer)
+        heat_layer = folium.FeatureGroup(name="Mapa de calor votos 2026", show=False)
+        HeatMap(heat_data, radius=22, blur=20, min_opacity=0.12, max_val=300, gradient={0.2: '#EFF6FF', 0.4: '#BAE6FD', 0.6: '#3B82F6', 0.8: '#1D4ED8', 1.0: '#1E3A8A'}).add_to(heat_layer)
         heat_layer.add_to(m)
         
         heat_legend_html = """
@@ -950,7 +950,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         upz = safe_html(r.get("UPZ", ""))
         accion = safe_html(r.get("ACCION_RECOMENDADA", ""))
         votos = float(r.get("VOTOS_2026", 0) or 0)
-        radius = max(4, min(10, 4 + math.sqrt(votos) / 3))
+        radius = max(4, min(8, 4 + math.sqrt(votos) / 4))
 
         popup = f"""
         <div style="font-family:'Inter', sans-serif; width:340px; color:#0F172A;">
@@ -972,10 +972,10 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
             location=[r["LATITUD"], r["LONGITUD"]],
             radius=radius,
             color="#FFFFFF",
-            weight=1.5,
+            weight=1.2,
             fill=True,
             fill_color=color_templo,
-            fill_opacity=0.78,
+            fill_opacity=0.72,
             popup=folium.Popup(popup, max_width=380),
             tooltip=f"{r.get('PUESTO','')} | {r.get('IGLESIA','')} | {fmt_number(r.get('VOTOS_2026'),0)} votos",
         ).add_to(puestos_layer)
@@ -995,11 +995,11 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
             icon=folium.DivIcon(
                 html=f'''
                 <div style="
-                    width:18px;
-                    height:18px;
+                    width:22px;
+                    height:22px;
                     border-radius:50%;
                     background:{color};
-                    border:3px solid white;
+                    border:4px solid white;
                     box-shadow:0 2px 8px rgba(15,23,42,.35);
                 "></div>
                 '''
@@ -1045,19 +1045,18 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         """
         folium.CircleMarker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            radius=3.5,
-            color="#2563EB",
-            weight=1,
+            radius=3,
+            color="#FFFFFF",
+            weight=0.8,
             fill=True,
             fill_color="#2563EB",
-            fill_opacity=0.35,
+            fill_opacity=0.25,
             tooltip=f"{r.get('TIPO_ACTIVIDAD','')} | {r.get('IGLESIA','')}",
             popup=folium.Popup(popup_actividad, max_width=340),
         ).add_to(acts_layer)
     acts_layer.add_to(m)
 
-    # Mesas
-    mesas_layer = folium.FeatureGroup(name="Mesas de trabajo", show=True)
+    mesas_layer = folium.FeatureGroup(name="Mesas de trabajo", show=False)
     for _, r in mesas.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         popup_mesa = f"""
         <div style="font-family:'Inter', sans-serif; width:300px; color:#0F172A;">
@@ -1074,12 +1073,12 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         """
         folium.CircleMarker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            radius=5.5,
+            radius=4.5,
             color="#FFFFFF",
-            weight=1.3,
+            weight=1,
             fill=True,
             fill_color="#F97316",
-            fill_opacity=0.70,
+            fill_opacity=0.55,
             tooltip=f"Mesa | {r.get('IGLESIA','')} | {r.get('BARRIO','')}",
             popup=folium.Popup(popup_mesa, max_width=360),
         ).add_to(mesas_layer)
@@ -1102,33 +1101,38 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         right: 35px;
         z-index:9999;
         background:white;
-        padding:12px 14px;
+        padding:10px 12px;
         border:1px solid #CBD5E1;
-        border-radius:12px;
+        border-radius:10px;
         box-shadow:0 4px 14px rgba(15,23,42,.16);
-        font-size:12px;
+        font-size:11px;
         color:#0F172A;
-        min-width:210px;
+        min-width:190px;
+        max-width:190px;
         font-family: 'Inter', sans-serif;
     ">
-        <div style="font-weight:900;margin-bottom:7px;">Lectura del mapa</div>
+        <div style="font-weight:900;margin-bottom:6px;">Lectura del mapa</div>
         {legend_items}
-        <div style="height:1px;background:#E2E8F0;margin:8px 0;"></div>
-        <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
+        <div style="height:1px;background:#E2E8F0;margin:6px 0;"></div>
+        <div style="display:flex;align-items:center;gap:7px;margin:3px 0;">
             <span style="width:14px;height:14px;border-radius:50%;background:#FFFFFF;border:4px solid #0F172A;display:inline-block;"></span>
             <span>Templo oficial</span>
         </div>
-        <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
-            <span style="width:10px;height:10px;border-radius:50%;background:#2563EB;opacity:.55;display:inline-block;"></span>
+        <div style="display:flex;align-items:center;gap:7px;margin:3px 0;">
+            <span style="width:10px;height:10px;border-radius:50%;background:#2563EB;opacity:.4;display:inline-block;"></span>
             <span>Actividad de campaña</span>
         </div>
-        <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
+        <div style="display:flex;align-items:center;gap:7px;margin:3px 0;">
             <span style="width:10px;height:10px;border-radius:50%;background:#F97316;display:inline-block;"></span>
             <span>Mesa de trabajo</span>
         </div>
-        <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
+        <div style="display:flex;align-items:center;gap:7px;margin:3px 0;">
             <span style="width:10px;height:10px;background:#94A3B8;opacity:.5;display:inline-block;"></span>
             <span>Otras localidades</span>
+        </div>
+        <div style="height:1px;background:#E2E8F0;margin:6px 0;"></div>
+        <div style="font-size:9.5px;color:#64748B;line-height:1.2;">
+            Active capas adicionales desde el control superior derecho.
         </div>
     </div>
     '''
@@ -1591,6 +1595,7 @@ with tab_mapa:
         metric_card("Ajustes operativos", fmt_number(ajustes_operativos, 0), icon="⚙️")
 
     mapa = crear_mapa(puestos_mapa, iglesias_mapa, acts_mapa, mesas_mapa)
+    st.markdown("<div style='font-size:14px; color:#475569; margin-bottom:10px;'>💡 <b>Vista inicial limpia:</b> puestos de votación y templos oficiales. Active el mapa de calor, actividades o mesas desde el control de capas si requiere mayor detalle.</div>", unsafe_allow_html=True)
     st_folium(mapa, width=None, height=720)
 
     with st.expander("Ajustar templo de una mesa de trabajo", expanded=False):
