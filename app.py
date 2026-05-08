@@ -15,6 +15,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import folium
+from branca.element import MacroElement, Template
 from folium.plugins import HeatMap, Fullscreen, MiniMap
 from streamlit_folium import folium_static, st_folium
 
@@ -1199,6 +1200,33 @@ def crear_heat_config(puestos_df):
     }
 
 
+class MapControlHtml(MacroElement):
+    def __init__(self, html_content, position="bottomright"):
+        super().__init__()
+        self._name = "MapControlHtml"
+        self.html_content = html_content
+        self.position = position
+        self._template = Template(
+            """
+            {% macro script(this, kwargs) %}
+            var {{ this.get_name() }} = L.control({position: '{{ this.position }}'});
+            {{ this.get_name() }}.onAdd = function (map) {
+                var div = L.DomUtil.create('div');
+                div.innerHTML = {{ this.html_content|tojson }};
+                L.DomEvent.disableClickPropagation(div);
+                L.DomEvent.disableScrollPropagation(div);
+                return div;
+            };
+            {{ this.get_name() }}.addTo({{ this._parent.get_name() }});
+            {% endmacro %}
+            """
+        )
+
+
+def add_map_control_html(mapa, html_content, position="bottomright"):
+    mapa.add_child(MapControlHtml(html_content, position=position))
+
+
 def agregar_heatmap_electoral(mapa, puestos_df, show=True, name="Rango de calor electoral 2026"):
     heat_config = crear_heat_config(puestos_df)
     if not heat_config:
@@ -1222,7 +1250,7 @@ def agregar_heatmap_electoral(mapa, puestos_df, show=True, name="Rango de calor 
     heat_layer.add_to(mapa)
 
     heat_legend_html = f"""
-    <div style="position: fixed; top: 118px; left: 18px; z-index:9999; background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px); padding:12px 14px; border:1px solid #CBD5E1; border-radius:8px; box-shadow:0 8px 22px rgba(15, 23, 42, 0.12); font-size:12px; width: 240px; font-family:'Inter', Arial, sans-serif;">
+    <div style="background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px); padding:12px 14px; border:1px solid #CBD5E1; border-radius:8px; box-shadow:0 8px 22px rgba(15, 23, 42, 0.12); font-size:12px; width: 240px; font-family:'Inter', Arial, sans-serif;">
     <div style="color:#0F172A; font-weight:900; margin-bottom:7px;">Rango electoral 2026</div>
     <div style="background: linear-gradient(to right, #ECFEFF, #7DD3FC, #2563EB, #F59E0B, #EF4444, #7F1D1D); width: 100%; height: 13px; border-radius: 999px; margin: 8px 0;"></div>
     <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:4px; color:#475569; font-size:10px; font-weight:700;">
@@ -1234,7 +1262,7 @@ def agregar_heatmap_electoral(mapa, puestos_df, show=True, name="Rango de calor 
     <div style="color:#64748B; font-size:10px; margin-top:6px;">Max: {fmt_number(heat_config['vmax'],0)} votos. Escala ajustada al filtro actual.</div>
     </div>
     """
-    mapa.get_root().html.add_child(folium.Element(heat_legend_html))
+    add_map_control_html(mapa, heat_legend_html, position="bottomleft")
     return heat_config
 
 
@@ -1337,21 +1365,7 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df, layers_config=None):
     )
 
     legend_html = f'''
-    <div style="
-        position: fixed;
-        bottom: 35px;
-        right: 35px;
-        z-index:9999;
-        background:white;
-        padding:12px 14px;
-        border:1px solid #CBD5E1;
-        border-radius:8px;
-        box-shadow:0 4px 14px rgba(15,23,42,.16);
-        font-size:12px;
-        color:#0F172A;
-        min-width:210px;
-        font-family: 'Inter', sans-serif;
-    ">
+    <div style="background:white;padding:12px 14px;border:1px solid #CBD5E1;border-radius:8px;box-shadow:0 4px 14px rgba(15,23,42,.16);font-size:12px;color:#0F172A;min-width:210px;font-family:'Inter', sans-serif;">
         <div style="font-weight:900;margin-bottom:7px;">Asignación territorial</div>
         {legend_items}
         <div style="height:1px;background:#E2E8F0;margin:8px 0;"></div>
@@ -1365,7 +1379,7 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df, layers_config=None):
         </div>
     </div>
     '''
-    m.get_root().html.add_child(folium.Element(legend_html))
+    add_map_control_html(m, legend_html, position="bottomright")
     return m
 
 
@@ -1809,22 +1823,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general", 
     )
 
     legend_html = f'''
-    <div style="
-        position: fixed;
-        bottom: 35px;
-        right: 35px;
-        z-index:9999;
-        background:white;
-        padding:10px 12px;
-        border:1px solid #CBD5E1;
-        border-radius:10px;
-        box-shadow:0 4px 14px rgba(15,23,42,.16);
-        font-size:11px;
-        color:#0F172A;
-        min-width:190px;
-        max-width:190px;
-        font-family: 'Inter', sans-serif;
-    ">
+    <div style="background:white;padding:10px 12px;border:1px solid #CBD5E1;border-radius:10px;box-shadow:0 4px 14px rgba(15,23,42,.16);font-size:11px;color:#0F172A;min-width:190px;max-width:190px;font-family:'Inter', sans-serif;">
         <div style="font-weight:900;margin-bottom:6px;">Lectura del mapa</div>
         {legend_items}
         <div style="height:1px;background:#E2E8F0;margin:6px 0;"></div>
@@ -1848,7 +1847,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general", 
     </div>
     '''
 
-    m.get_root().html.add_child(folium.Element(legend_html))
+    add_map_control_html(m, legend_html, position="bottomright")
     return m
 
 
