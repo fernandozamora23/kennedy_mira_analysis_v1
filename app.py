@@ -6,6 +6,8 @@ import html
 from io import BytesIO
 import json
 import math
+import sqlite3
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -13,7 +15,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import folium
-from folium.plugins import HeatMap, Fullscreen, MiniMap, MarkerCluster
+from folium.plugins import HeatMap, Fullscreen, MiniMap
 from streamlit_folium import st_folium
 
 # ============================================================
@@ -264,6 +266,7 @@ def check_password():
     if ingresar:
         if hmac.compare_digest(usuario, usuario_correcto) and hmac.compare_digest(password, password_correcto):
             st.session_state["autenticado"] = True
+            st.session_state["usuario_actual"] = usuario
             st.rerun()
         else:
             st.error("Usuario o contraseña incorrectos.")
@@ -276,6 +279,7 @@ if not check_password():
 
 
 AJUSTES_FILE = DATA_DIR / "ajustes_guardados.json"
+AJUSTES_DB_FILE = DATA_DIR / "ajustes_territoriales.db"
 
 def cargar_ajustes_guardados():
     if AJUSTES_FILE.exists():
@@ -286,6 +290,222 @@ def cargar_ajustes_guardados():
             pass
     return {"ajustes_asignacion": {}, "ajustes_mesas": {}, "ajustes_actividades": {}}
 
+
+def _ahora_utc_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _session_key_to_entidad(session_key):
+    mapping = {
+        "ajustes_asignacion": "puesto",
+        "ajustes_mesas": "mesa",
+        "ajustes_actividades": "actividad",
+    }
+    if session_key not in mapping:
+        raise ValueError(f"Session key no soportada: {session_key}")
+    return mapping[session_key]
+
+
+def _entidad_to_session_key(entidad):
+    mapping = {
+        "puesto": "ajustes_asignacion",
+        "mesa": "ajustes_mesas",
+        "actividad": "ajustes_actividades",
+    }
+    return mapping.get(entidad)
+
+
+def _normalize_entity_id(entidad, entity_id):
+    if entidad in {"mesa", "actividad"}:
+        try:
+            return int(entity_id)
+        except Exception:
+            return str(entity_id)
+    return str(entity_id)
+
+
+def get_db_connection():
+    conn = sqlite3.connect(AJUSTES_DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_ajustes_db():
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ajustes_actuales (
+                entidad TEXT NOT NULL,
+                entidad_id TEXT NOT NULL,
+                nombre_entidad TEXT,
+                templo_actual TEXT NOT NULL,
+                usuario TEXT,
+                motivo TEXT,
+                actualizado_en TEXT NOT NULL,
+                PRIMARY KEY (entidad, entidad_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ajustes_historial (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entidad TEXT NOT NULL,
+                entidad_id TEXT NOT NULL,
+                nombre_entidad TEXT,
+                templo_anterior TEXT,
+                templo_nuevo TEXT,
+                usuario TEXT,
+                motivo TEXT,
+                creado_en TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_historial_creado_en ON ajustes_historial(creado_en DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_historial_entidad_id ON ajustes_historial(entidad, entidad_id)")
+
+
+def cargar_ajustes_desde_db():
+    ajustes = {"ajustes_asignacion": {}, "ajustes_mesas": {}, "ajustes_actividades": {}}
+    with get_db_connection() as conn:
+        rows = conn.execute("SELECT entidad, entidad_id, templo_actual FROM ajustes_actuales").fetchall()
+    for row in rows:
+        session_key = _entidad_to_session_key(row["entidad"])
+        if not session_key:
+            continue
+        key = _normalize_entity_id(row["entidad"], row["entidad_id"])
+        ajustes[session_key][key] = row["templo_actual"]
+    return ajustes
+
+
+def registrar_ajuste_en_db(session_key, entity_id, nombre_entidad, templo_nuevo, motivo=""):
+    entidad = _session_key_to_entidad(session_key)
+    entidad_id = str(_normalize_entity_id(entidad, entity_id))
+    usuario = st.session_state.get("usuario_actual", "usuario_dashboard")
+    now = _ahora_utc_iso()
+
+    with get_db_connection() as conn:
+        previo = conn.execute(
+            "SELECT templo_actual FROM ajustes_actuales WHERE entidad = ? AND entidad_id = ?",
+            (entidad, entidad_id),
+        ).fetchone()
+        templo_anterior = previo["templo_actual"] if previo else None
+        if templo_anterior == str(templo_nuevo):
+            return False, templo_anterior
+
+        conn.execute(
+            """
+            INSERT INTO ajustes_actuales(entidad, entidad_id, nombre_entidad, templo_actual, usuario, motivo, actualizado_en)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(entidad, entidad_id) DO UPDATE SET
+                nombre_entidad=excluded.nombre_entidad,
+                templo_actual=excluded.templo_actual,
+                usuario=excluded.usuario,
+                motivo=excluded.motivo,
+                actualizado_en=excluded.actualizado_en
+            """,
+            (entidad, entidad_id, str(nombre_entidad or ""), str(templo_nuevo), usuario, str(motivo or ""), now),
+        )
+        conn.execute(
+            """
+            INSERT INTO ajustes_historial(entidad, entidad_id, nombre_entidad, templo_anterior, templo_nuevo, usuario, motivo, creado_en)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (entidad, entidad_id, str(nombre_entidad or ""), templo_anterior, str(templo_nuevo), usuario, str(motivo or ""), now),
+        )
+    return True, templo_anterior
+
+
+def limpiar_ajustes_en_db(session_key, motivo=""):
+    entidad = _session_key_to_entidad(session_key)
+    usuario = st.session_state.get("usuario_actual", "usuario_dashboard")
+    now = _ahora_utc_iso()
+    with get_db_connection() as conn:
+        actuales = conn.execute(
+            "SELECT entidad_id, nombre_entidad, templo_actual FROM ajustes_actuales WHERE entidad = ?",
+            (entidad,),
+        ).fetchall()
+        for row in actuales:
+            conn.execute(
+                """
+                INSERT INTO ajustes_historial(entidad, entidad_id, nombre_entidad, templo_anterior, templo_nuevo, usuario, motivo, creado_en)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (entidad, row["entidad_id"], row["nombre_entidad"], row["templo_actual"], None, usuario, str(motivo or "limpieza masiva"), now),
+            )
+        conn.execute("DELETE FROM ajustes_actuales WHERE entidad = ?", (entidad,))
+    return len(actuales)
+
+
+def obtener_historial_ajustes(limit=300):
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, creado_en, entidad, entidad_id, nombre_entidad, templo_anterior, templo_nuevo, usuario, motivo
+            FROM ajustes_historial
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "id",
+                "creado_en",
+                "entidad",
+                "entidad_id",
+                "nombre_entidad",
+                "templo_anterior",
+                "templo_nuevo",
+                "usuario",
+                "motivo",
+            ]
+        )
+    return pd.DataFrame([dict(r) for r in rows])
+
+
+def obtener_ajustes_actuales_df(entidad=None):
+    where = ""
+    params = ()
+    if entidad:
+        where = "WHERE entidad = ?"
+        params = (entidad,)
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT entidad, entidad_id, nombre_entidad, templo_actual, usuario, motivo, actualizado_en
+            FROM ajustes_actuales
+            {where}
+            ORDER BY actualizado_en DESC
+            """,
+            params,
+        ).fetchall()
+    if not rows:
+        return pd.DataFrame(
+            columns=["entidad", "entidad_id", "nombre_entidad", "templo_actual", "usuario", "motivo", "actualizado_en"]
+        )
+    return pd.DataFrame([dict(r) for r in rows])
+
+
+def migrar_ajustes_json_a_db(ajustes_json):
+    for session_key, payload in (ajustes_json or {}).items():
+        if session_key not in {"ajustes_asignacion", "ajustes_mesas", "ajustes_actividades"}:
+            continue
+        for raw_key, templo in (payload or {}).items():
+            try:
+                entity_key = raw_key if session_key == "ajustes_asignacion" else int(raw_key)
+            except Exception:
+                entity_key = raw_key
+            registrar_ajuste_en_db(
+                session_key=session_key,
+                entity_id=entity_key,
+                nombre_entidad=str(raw_key),
+                templo_nuevo=templo,
+                motivo="Migración inicial desde ajustes_guardados.json",
+            )
+
+
 def guardar_ajustes_guardados():
     datos = {
         "ajustes_asignacion": st.session_state.get("ajustes_asignacion", {}),
@@ -295,12 +515,26 @@ def guardar_ajustes_guardados():
     with open(AJUSTES_FILE, "w", encoding="utf-8") as f:
         json.dump(datos, f, ensure_ascii=False, indent=2)
 
+if "usuario_actual" not in st.session_state:
+    st.session_state["usuario_actual"] = "usuario_dashboard"
+
 if "ajustes_cargados" not in st.session_state:
-    ajustes_disco = cargar_ajustes_guardados()
-    st.session_state["ajustes_asignacion"] = ajustes_disco.get("ajustes_asignacion", {})
-    st.session_state["ajustes_mesas"] = ajustes_disco.get("ajustes_mesas", {})
-    st.session_state["ajustes_actividades"] = ajustes_disco.get("ajustes_actividades", {})
-    st.session_state["ajustes_cargados"] = True# ============================================================
+    init_ajustes_db()
+    ajustes_db = cargar_ajustes_desde_db()
+    if any(bool(v) for v in ajustes_db.values()):
+        st.session_state["ajustes_asignacion"] = ajustes_db.get("ajustes_asignacion", {})
+        st.session_state["ajustes_mesas"] = ajustes_db.get("ajustes_mesas", {})
+        st.session_state["ajustes_actividades"] = ajustes_db.get("ajustes_actividades", {})
+    else:
+        ajustes_disco = cargar_ajustes_guardados()
+        st.session_state["ajustes_asignacion"] = ajustes_disco.get("ajustes_asignacion", {})
+        st.session_state["ajustes_mesas"] = ajustes_disco.get("ajustes_mesas", {})
+        st.session_state["ajustes_actividades"] = ajustes_disco.get("ajustes_actividades", {})
+        if any(bool(v) for v in ajustes_disco.values()):
+            migrar_ajustes_json_a_db(ajustes_disco)
+    st.session_state["ajustes_cargados"] = True
+
+# ============================================================
 # FUNCIONES
 # ============================================================
 
@@ -570,11 +804,171 @@ def crear_tabla_puestos_por_templo(asignacion_df):
     return pd.DataFrame({templo: valores + [""] * (max_len - len(valores)) for templo, valores in grupos.items()})
 
 
+def crear_icono_div(tipo, color, label):
+    if tipo == "templo":
+        return folium.DivIcon(
+            icon_size=(32, 40),
+            icon_anchor=(16, 40),
+            html=f'''
+            <div style="
+                position:relative;
+                width:32px;
+                height:40px;
+                filter:drop-shadow(0 4px 8px rgba(15,23,42,.35));
+            ">
+                <div style="
+                    position:absolute;
+                    left:4px;
+                    top:0;
+                    width:24px;
+                    height:24px;
+                    background:{color};
+                    border:4px solid #FFFFFF;
+                    border-radius:50% 50% 50% 0;
+                    transform:rotate(-45deg);
+                    box-sizing:border-box;
+                "></div>
+                <div style="
+                    position:absolute;
+                    left:11px;
+                    top:7px;
+                    width:10px;
+                    height:10px;
+                    border-radius:50%;
+                    background:#FFFFFF;
+                    box-shadow:0 0 0 2px rgba(255,255,255,.25);
+                "></div>
+            </div>
+            '''
+        )
+
+    shape = "50%" if tipo == "mesa" else "6px"
+    size = 20
+    border = 2
+    return folium.DivIcon(
+        html=f'''
+        <div style="
+            width:{size}px;
+            height:{size}px;
+            border-radius:{shape};
+            background:{color};
+            border:{border}px solid #FFFFFF;
+            box-shadow:0 3px 10px rgba(15,23,42,.30);
+            color:#FFFFFF;
+            font-family:'Inter', Arial, sans-serif;
+            font-size:{14 if tipo == "templo" else 11}px;
+            font-weight:900;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            line-height:1;
+            box-sizing:border-box;
+            transform:translate(-50%, -50%);
+        ">{label}</div>
+        '''
+    )
+
+
+def crear_etiqueta_templo(nombre, color, dx=30, dy=-18):
+    return folium.DivIcon(
+        html=f'''
+        <div style="
+            transform:translate({dx}px,{dy}px);
+            background:rgba(255,255,255,.92);
+            border:1.5px solid rgba(15,23,42,.16);
+            border-left:6px solid {color};
+            border-radius:7px;
+            padding:7px 12px 7px 9px;
+            color:#111827;
+            font-family:'Inter', Arial, sans-serif;
+            font-size:15px;
+            font-weight:950;
+            line-height:1;
+            box-shadow:
+                0 0 0 3px rgba(255,255,255,.86),
+                0 6px 16px rgba(15,23,42,.22);
+            white-space:nowrap;
+            text-transform:uppercase;
+            text-shadow:
+                -1px -1px 0 #FFFFFF,
+                1px -1px 0 #FFFFFF,
+                -1px 1px 0 #FFFFFF,
+                1px 1px 0 #FFFFFF,
+                0 2px 0 #FFFFFF;
+        ">
+            {safe_html(nombre)}
+        </div>
+        '''
+    )
+
+
+def crear_heat_config(puestos_df):
+    valid_heat = puestos_df.dropna(subset=["LATITUD", "LONGITUD", "VOTOS_2026"]).copy()
+    if valid_heat.empty:
+        return None
+
+    votos = pd.to_numeric(valid_heat["VOTOS_2026"], errors="coerce").fillna(0)
+    valid_heat["VOTOS_2026"] = votos
+    q10, q40, q70, q90 = votos.quantile([0.10, 0.40, 0.70, 0.90]).tolist()
+    vmax = max(float(votos.max()), 1.0)
+    valid_heat["PESO_HEAT"] = votos.rank(pct=True, method="average").fillna(0).clip(0.08, 1.0)
+    heat_data = valid_heat[["LATITUD", "LONGITUD", "PESO_HEAT"]].values.tolist()
+
+    return {
+        "data": heat_data,
+        "q10": q10,
+        "q40": q40,
+        "q70": q70,
+        "q90": q90,
+        "vmax": vmax,
+    }
+
+
+def agregar_heatmap_electoral(mapa, puestos_df, show=True, name="Rango de calor electoral 2026"):
+    heat_config = crear_heat_config(puestos_df)
+    if not heat_config:
+        return None
+
+    heat_layer = folium.FeatureGroup(name=name, show=show)
+    HeatMap(
+        heat_config["data"],
+        radius=25,
+        blur=16,
+        min_opacity=0.22,
+        gradient={
+            0.08: "#ECFEFF",
+            0.28: "#7DD3FC",
+            0.50: "#2563EB",
+            0.72: "#F59E0B",
+            0.90: "#EF4444",
+            1.00: "#7F1D1D",
+        },
+    ).add_to(heat_layer)
+    heat_layer.add_to(mapa)
+
+    heat_legend_html = f"""
+    <div style="position: fixed; bottom: 38px; left: 330px; z-index:9999; background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px); padding:12px 14px; border:1px solid #CBD5E1; border-radius:8px; box-shadow:0 8px 22px rgba(15, 23, 42, 0.12); font-size:12px; width: 240px; font-family:'Inter', Arial, sans-serif;">
+    <div style="color:#0F172A; font-weight:900; margin-bottom:7px;">Rango electoral 2026</div>
+    <div style="background: linear-gradient(to right, #ECFEFF, #7DD3FC, #2563EB, #F59E0B, #EF4444, #7F1D1D); width: 100%; height: 13px; border-radius: 999px; margin: 8px 0;"></div>
+    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:4px; color:#475569; font-size:10px; font-weight:700;">
+        <span>P10<br>{fmt_number(heat_config['q10'],0)}</span>
+        <span>P40<br>{fmt_number(heat_config['q40'],0)}</span>
+        <span>P70<br>{fmt_number(heat_config['q70'],0)}</span>
+        <span style="text-align:right;">P90<br>{fmt_number(heat_config['q90'],0)}</span>
+    </div>
+    <div style="color:#64748B; font-size:10px; margin-top:6px;">Max: {fmt_number(heat_config['vmax'],0)} votos. Escala ajustada al filtro actual.</div>
+    </div>
+    """
+    mapa.get_root().html.add_child(folium.Element(heat_legend_html))
+    return heat_config
+
+
 def crear_mapa_asignacion(asignacion_df, iglesias_df):
     m = folium.Map(location=KENNEDY_CENTER, zoom_start=13, tiles="CartoDB positron", control_scale=True)
     Fullscreen(position="topleft").add_to(m)
     MiniMap(toggle_display=True, position="bottomleft").add_to(m)
     agregar_contorno_localidades(m)
+    agregar_heatmap_electoral(m, asignacion_df, show=False, name="Rango de calor votos 2026")
 
     templos = iglesias_df[iglesias_df["IGLESIA"].isin(TEMPLOS_OFICIALES)].dropna(subset=["LATITUD", "LONGITUD"]).copy()
     templo_coords = {r["IGLESIA"]: (r["LATITUD"], r["LONGITUD"]) for _, r in templos.iterrows()}
@@ -588,52 +982,11 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
                 f"<b>{safe_html(r['IGLESIA'])}</b><br>Lat: {r['LATITUD']}<br>Lon: {r['LONGITUD']}",
                 max_width=260
             ),
-            icon=folium.DivIcon(
-                html=f'''
-                <div style="
-                    width:30px;
-                    height:30px;
-                    border-radius:50%;
-                    background:{color};
-                    border:5px solid #FFFFFF;
-                    box-shadow:
-                        0 0 0 4px {color}33,
-                        0 4px 14px rgba(15,23,42,.35);
-                    display:flex;
-                    align-items:center;
-                    justify-content:center;
-                ">
-                    <div style="
-                        width:9px;
-                        height:9px;
-                        border-radius:50%;
-                        background:#FFFFFF;
-                    "></div>
-                </div>
-                '''
-            ),
+            icon=crear_icono_div("templo", color, "T"),
         ).add_to(templos_layer)
         folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            icon=folium.DivIcon(
-                html=f'''
-                <div style="
-                    transform:translate(28px,-13px);
-                    background:#FFFFFF;
-                    border:1.5px solid {color};
-                    border-radius:999px;
-                    padding:5px 10px;
-                    color:{color};
-                    font-size:11px;
-                    font-weight:900;
-                    box-shadow:0 2px 8px rgba(15,23,42,.20);
-                    white-space:nowrap;
-                    letter-spacing:-0.01em;
-                ">
-                    {safe_html(r["IGLESIA"])}
-                </div>
-                '''
-            ),
+            icon=crear_etiqueta_templo(r["IGLESIA"], color, dx=34, dy=-20),
         ).add_to(templos_layer)
 
     puestos_layer = folium.FeatureGroup(name="Puestos por templo asignado", show=True)
@@ -661,8 +1014,8 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
             folium.PolyLine(
                 locations=[[r["LATITUD"], r["LONGITUD"]], list(templo_coords[templo])],
                 color=color,
-                weight=1.15,
-                opacity=0.32,
+                weight=1.05,
+                opacity=0.24,
                 tooltip=f"{r.get('PUESTO')} → {templo} | {fmt_number(distancia, 2)} km",
             ).add_to(lineas_layer)
             
@@ -685,7 +1038,7 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
     legend_items = "".join(
         f'''
         <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
-            <span style="width:10px;height:10px;border-radius:50%;background:{color};display:inline-block;"></span>
+            <span style="width:11px;height:11px;border-radius:50%;background:{color};border:2px solid #FFFFFF;box-shadow:0 0 0 1px {color};display:inline-block;"></span>
             <span>{templo}</span>
         </div>
         '''
@@ -701,7 +1054,7 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
         background:white;
         padding:12px 14px;
         border:1px solid #CBD5E1;
-        border-radius:12px;
+        border-radius:8px;
         box-shadow:0 4px 14px rgba(15,23,42,.16);
         font-size:12px;
         color:#0F172A;
@@ -714,6 +1067,10 @@ def crear_mapa_asignacion(asignacion_df, iglesias_df):
         <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
             <span style="width:24px;border-top:2px solid #64748B;display:inline-block;"></span>
             <span>Línea puesto-templo</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;margin:4px 0;">
+            <span style="width:14px;height:14px;background:#0F172A;border:3px solid white;border-radius:50% 50% 50% 0;transform:rotate(-45deg);display:inline-block;box-shadow:0 0 0 1px #0F172A;"></span>
+            <span>Templo oficial</span>
         </div>
     </div>
     '''
@@ -731,10 +1088,48 @@ def exportar_asignacion_excel(asignacion_df, resumen_df, tabla_df):
     return output.getvalue()
 
 
+def exportar_asignacion_por_templo_excel(asignacion_df, actividades_df, mesas_df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        resumen_global = crear_resumen_asignacion(asignacion_df)
+        resumen_global.to_excel(writer, sheet_name="resumen_global", index=False)
+        informes = []
+        for templo in TEMPLOS_OFICIALES:
+            puestos_t = asignacion_df[asignacion_df["TEMPLO_ASIGNADO_FINAL"].eq(templo)].copy()
+            acts_t = actividades_df[actividades_df.get("IGLESIA", pd.Series(dtype=str)).eq(templo)].copy() if not actividades_df.empty else pd.DataFrame()
+            mesas_t = mesas_df[mesas_df.get("IGLESIA", pd.Series(dtype=str)).eq(templo)].copy() if not mesas_df.empty else pd.DataFrame()
+            informes.append({
+                "TEMPLO": templo,
+                "PUESTOS": len(puestos_t),
+                "VOTOS_2026": pd.to_numeric(puestos_t.get("VOTOS_2026", pd.Series(dtype=float)), errors="coerce").fillna(0).sum(),
+                "ACTIVIDADES": len(acts_t),
+                "MESAS": len(mesas_t),
+                "LECTURA": generar_informe_templo_markdown(templo, puestos_t.rename(columns={"TEMPLO_ASIGNADO_FINAL": "IGLESIA"}), acts_t, mesas_t),
+            })
+
+            base_sheet = templo.replace(" ", "_")[:20]
+            puestos_t.to_excel(writer, sheet_name=f"{base_sheet}_puestos"[:31], index=False)
+            if not acts_t.empty:
+                acts_t.to_excel(writer, sheet_name=f"{base_sheet}_acts"[:31], index=False)
+            if not mesas_t.empty:
+                mesas_t.to_excel(writer, sheet_name=f"{base_sheet}_mesas"[:31], index=False)
+        pd.DataFrame(informes).to_excel(writer, sheet_name="lectura_por_templo", index=False)
+    return output.getvalue()
+
+
 def to_excel_bytes(df, sheet_name="Hoja1"):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name=sheet_name, index=False)
+    return output.getvalue()
+
+
+def multi_sheet_excel_bytes(sheets):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for sheet_name, df in sheets.items():
+            clean_name = str(sheet_name)[:31]
+            (df if df is not None else pd.DataFrame()).to_excel(writer, sheet_name=clean_name, index=False)
     return output.getvalue()
 
 
@@ -777,6 +1172,63 @@ def generar_informe_territorial(asignacion_df, actividades_df, mesas_df):
         "## Lectura metodológica",
         "La asignación de puestos se basa en cercanía geográfica al templo; las actividades y mesas pueden reasignarse temporalmente para discusión territorial.",
         "La propuesta debe revisarse con liderazgo comunitario, capacidad operativa, rutas, barrios priorizados y conocimiento de los equipos locales.",
+    ])
+    return "\n".join(lineas)
+
+
+def generar_informe_templo_markdown(templo, puestos_df, actividades_df, mesas_df, resumen_row=None):
+    puestos_t = puestos_df[puestos_df.get("IGLESIA", pd.Series(dtype=str)).eq(templo)].copy() if not puestos_df.empty else pd.DataFrame()
+    acts_t = actividades_df[actividades_df.get("IGLESIA", pd.Series(dtype=str)).eq(templo)].copy() if not actividades_df.empty else pd.DataFrame()
+    mesas_t = mesas_df[mesas_df.get("IGLESIA", pd.Series(dtype=str)).eq(templo)].copy() if not mesas_df.empty else pd.DataFrame()
+
+    votos_2026 = pd.to_numeric(puestos_t.get("VOTOS_2026", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
+    votos_2023 = pd.to_numeric(puestos_t.get("VOTOS_2023", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
+    variacion = votos_2026 - votos_2023
+    variacion_pct = variacion / votos_2023 if votos_2023 else np.nan
+    prioridad_alta = int(puestos_t.get("PRIORIDAD", pd.Series(dtype=str)).astype(str).str.upper().eq("ALTA").sum()) if not puestos_t.empty else 0
+    puestos_caida = puestos_t.assign(_VAR=pd.to_numeric(puestos_t.get("VARIACION_ABSOLUTA", pd.Series(dtype=float)), errors="coerce")).sort_values("_VAR", ascending=True).head(5)
+    puestos_crecimiento = puestos_t.assign(_VAR=pd.to_numeric(puestos_t.get("VARIACION_ABSOLUTA", pd.Series(dtype=float)), errors="coerce")).sort_values("_VAR", ascending=False).head(5)
+    cobertura_operativa = len(acts_t) + len(mesas_t)
+
+    if pd.notna(variacion_pct) and variacion_pct < -0.10:
+        estado = "Critico: requiere plan de recuperación inmediato."
+    elif pd.notna(variacion_pct) and variacion_pct < 0:
+        estado = "Atención media: contiene pérdida y debe reforzarse."
+    else:
+        estado = "Fortaleza: sostener presencia y convertir crecimiento en estructura."
+
+    lineas = [
+        f"# Informe por templo: {templo}",
+        "",
+        "## Resumen ejecutivo",
+        f"- Estado territorial: {estado}",
+        f"- Puestos asignados: {fmt_number(len(puestos_t), 0)}.",
+        f"- Votos 2026: {fmt_number(votos_2026, 0)} frente a {fmt_number(votos_2023, 0)} en 2023.",
+        f"- Variación: {fmt_number(variacion, 0)} votos ({fmt_pct(variacion_pct)}).",
+        f"- Puestos de prioridad alta: {fmt_number(prioridad_alta, 0)}.",
+        f"- Actividades y mesas registradas: {fmt_number(cobertura_operativa, 0)} ({fmt_number(len(acts_t), 0)} actividades, {fmt_number(len(mesas_t), 0)} mesas).",
+        "",
+        "## Puestos a recuperar",
+    ]
+    if puestos_caida.empty:
+        lineas.append("- Sin puestos con información suficiente de caída.")
+    else:
+        for _, r in puestos_caida.iterrows():
+            lineas.append(f"- {r.get('PUESTO')}: {fmt_number(r.get('VARIACION_ABSOLUTA'), 0)} votos; prioridad {r.get('PRIORIDAD', 'N.D.')}.")
+
+    lineas.extend(["", "## Puestos a consolidar"])
+    if puestos_crecimiento.empty:
+        lineas.append("- Sin puestos con información suficiente de crecimiento.")
+    else:
+        for _, r in puestos_crecimiento.iterrows():
+            lineas.append(f"- {r.get('PUESTO')}: +{fmt_number(r.get('VARIACION_ABSOLUTA'), 0)} votos; mantener estructura territorial.")
+
+    lineas.extend([
+        "",
+        "## Recomendación operativa",
+        "- Concentrar revisión semanal en puestos de prioridad alta y variación negativa.",
+        "- Cruzar mesas de trabajo con los puestos de mayor caudal electoral para cerrar brechas de presencia.",
+        "- Validar la asignación de templo con liderazgo local antes de convertirla en decisión operativa final.",
     ])
     return "\n".join(lineas)
 
@@ -893,10 +1345,14 @@ def aplicar_filtros(puestos, actividades, mesas, filtros):
     return puestos_f, acts_f, mesas_f
 
 
-def crear_mapa(puestos, iglesias, actividades, mesas):
+def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general"):
     m = folium.Map(location=KENNEDY_CENTER, zoom_start=13, tiles="CartoDB positron", control_scale=True)
     Fullscreen(position="topleft").add_to(m)
     MiniMap(toggle_display=True, position="bottomleft").add_to(m)
+    show_heat_default = map_mode in {"Vista general", "Vista de calor"}
+    show_puestos_default = map_mode in {"Vista general", "Vista de calor", "Vista electoral"}
+    show_acts_default = map_mode in {"Vista general", "Vista operativa"}
+    show_mesas_default = map_mode in {"Vista general", "Vista operativa"}
     localidades_gj = cargar_geojson(LOCALIDADES_GEOJSON)
     if localidades_gj:
         agregar_contorno_localidades(m)
@@ -926,25 +1382,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         except Exception:
             pass
 
-    # Heatmap
-    valid_heat = puestos.dropna(subset=["LATITUD", "LONGITUD", "VOTOS_2026"]).copy()
-    heat_data = valid_heat[["LATITUD", "LONGITUD", "VOTOS_2026"]].values.tolist()
-    if heat_data:
-        heat_layer = folium.FeatureGroup(name="Mapa de calor votos 2026", show=False)
-        HeatMap(heat_data, radius=22, blur=20, min_opacity=0.12, max_val=300, gradient={0.2: '#EFF6FF', 0.4: '#BAE6FD', 0.6: '#3B82F6', 0.8: '#1D4ED8', 1.0: '#1E3A8A'}).add_to(heat_layer)
-        heat_layer.add_to(m)
-        
-        heat_legend_html = """
-        <div style="position: fixed; bottom: 45px; left: 190px; z-index:9999; background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(8px); padding:12px 14px; border:1px solid #E2E8F0; border-radius:12px; box-shadow:0 8px 30px rgba(15, 23, 42, 0.08); font-size:12px; width: 185px;">
-        <b style="color:#0F172A; font-family:'Inter', sans-serif;">Índice Potencial Electoral</b><br>
-        <div style="background: linear-gradient(to right, #EFF6FF, #BAE6FD, #3B82F6, #1D4ED8, #1E3A8A); width: 100%; height: 12px; border-radius: 6px; margin: 10px 0;"></div>
-        <div style="display: flex; justify-content: space-between; color:#475569; font-size:10.5px; font-weight:600; font-family:'Inter', sans-serif;">
-            <span>Baja (Azul claro)<br>0 votos</span>
-            <span style="text-align: right;">Alta (Cobalto)<br>300+ votos</span>
-        </div>
-        </div>
-        """
-        m.get_root().html.add_child(folium.Element(heat_legend_html))
+    agregar_heatmap_electoral(m, puestos, show=show_heat_default, name="Rango de calor votos 2026")
 
     # MIRA Logo
     mira_logo_html = """
@@ -955,7 +1393,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     m.get_root().html.add_child(folium.Element(mira_logo_html))
 
     # Puestos
-    puestos_layer = folium.FeatureGroup(name="Puestos de votación fijos", show=True)
+    puestos_layer = folium.FeatureGroup(name="Puestos de votación fijos", show=show_puestos_default)
     for _, r in puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         iglesia = r.get("IGLESIA", "")
         color_templo = COLORES_TEMPLOS.get(iglesia, "#64748B")
@@ -1007,45 +1445,17 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
                 f"<b>{safe_html(r.get('IGLESIA',''))}</b><br>Lat: {r['LATITUD']}<br>Lon: {r['LONGITUD']}",
                 max_width=280,
             ),
-            icon=folium.DivIcon(
-                html=f'''
-                <div style="
-                    width:22px;
-                    height:22px;
-                    border-radius:50%;
-                    background:{color};
-                    border:4px solid white;
-                    box-shadow:0 2px 8px rgba(15,23,42,.35);
-                "></div>
-                '''
-            ),
+            icon=crear_icono_div("templo", color, "T"),
         ).add_to(iglesia_layer)
 
         folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            icon=folium.DivIcon(
-                html=f'''
-                <div style="
-                    transform:translate(18px,-12px);
-                    background:#FFFFFF;
-                    border:1px solid {color};
-                    border-radius:999px;
-                    padding:4px 8px;
-                    color:{color};
-                    font-size:10px;
-                    font-weight:800;
-                    box-shadow:0 1px 6px rgba(15,23,42,.18);
-                    white-space:nowrap;
-                ">
-                    {safe_html(r.get('IGLESIA',''))}
-                </div>
-                '''
-            ),
+            icon=crear_etiqueta_templo(r.get("IGLESIA", ""), color, dx=30, dy=-19),
         ).add_to(iglesia_layer)
     iglesia_layer.add_to(m)
 
     # Activities
-    acts_layer = folium.FeatureGroup(name="Actividades de campaña", show=False)
+    acts_layer = folium.FeatureGroup(name="Actividades de campaña", show=show_acts_default)
     for _, r in actividades.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         popup_actividad = f"""
         <div style="font-family:'Inter', sans-serif; width:280px; color:#0F172A;">
@@ -1058,20 +1468,15 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         </table>
         </div>
         """
-        folium.CircleMarker(
+        folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            radius=3,
-            color="#FFFFFF",
-            weight=0.8,
-            fill=True,
-            fill_color="#2563EB",
-            fill_opacity=0.25,
             tooltip=f"{r.get('TIPO_ACTIVIDAD','')} | {r.get('IGLESIA','')}",
             popup=folium.Popup(popup_actividad, max_width=340),
+            icon=crear_icono_div("actividad", "#2563EB", "A"),
         ).add_to(acts_layer)
     acts_layer.add_to(m)
 
-    mesas_layer = folium.FeatureGroup(name="Mesas de trabajo", show=False)
+    mesas_layer = folium.FeatureGroup(name="Mesas de trabajo", show=show_mesas_default)
     for _, r in mesas.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         popup_mesa = f"""
         <div style="font-family:'Inter', sans-serif; width:300px; color:#0F172A;">
@@ -1086,16 +1491,11 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         </table>
         </div>
         """
-        folium.CircleMarker(
+        folium.Marker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            radius=4.5,
-            color="#FFFFFF",
-            weight=1,
-            fill=True,
-            fill_color="#F97316",
-            fill_opacity=0.55,
             tooltip=f"Mesa | {r.get('IGLESIA','')} | {r.get('BARRIO','')}",
             popup=folium.Popup(popup_mesa, max_width=360),
+            icon=crear_icono_div("mesa", "#F97316", "M"),
         ).add_to(mesas_layer)
     mesas_layer.add_to(m)
 
@@ -1130,15 +1530,15 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         {legend_items}
         <div style="height:1px;background:#E2E8F0;margin:6px 0;"></div>
         <div style="display:flex;align-items:center;gap:7px;margin:3px 0;">
-            <span style="width:14px;height:14px;border-radius:50%;background:#FFFFFF;border:4px solid #0F172A;display:inline-block;"></span>
+            <span style="width:14px;height:14px;background:#0F172A;border:3px solid white;border-radius:50% 50% 50% 0;transform:rotate(-45deg);display:inline-block;box-shadow:0 0 0 1px #0F172A;"></span>
             <span>Templo oficial</span>
         </div>
         <div style="display:flex;align-items:center;gap:7px;margin:3px 0;">
-            <span style="width:10px;height:10px;border-radius:50%;background:#2563EB;opacity:.4;display:inline-block;"></span>
+            <span style="width:16px;height:16px;border-radius:5px;background:#2563EB;color:white;font-size:9px;font-weight:900;display:inline-flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 0 0 1px #2563EB;">A</span>
             <span>Actividad de campaña</span>
         </div>
         <div style="display:flex;align-items:center;gap:7px;margin:3px 0;">
-            <span style="width:10px;height:10px;border-radius:50%;background:#F97316;display:inline-block;"></span>
+            <span style="width:16px;height:16px;border-radius:50%;background:#F97316;color:white;font-size:9px;font-weight:900;display:inline-flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 0 0 1px #F97316;">M</span>
             <span>Mesa de trabajo</span>
         </div>
         <div style="display:flex;align-items:center;gap:7px;margin:3px 0;">
@@ -1369,45 +1769,49 @@ if pd.isna(puestos_cambio_templo) and "CAMBIO_PROPUESTO_TEMPLO" in puestos.colum
     puestos_cambio_templo = int(puestos["CAMBIO_PROPUESTO_TEMPLO"].astype(str).eq("SI").sum())
 
 c1, c2, c3, c4 = st.columns(4)
+
 with c1:
-    metric_card("Total general Kennedy 2026", fmt_number(total_2026, 0))
+    metric_card("Votos Kennedy 2026", fmt_number(total_2026, 0))
+
 with c2:
-    metric_card("Total general Kennedy 2023", fmt_number(total_2023, 0))
+    metric_card("Variación vs 2023", fmt_number(var_abs, 0), fmt_number(abs(var_abs), 0), positive=var_abs >= 0)
+
 with c3:
-    metric_card("Variación electoral", fmt_number(var_abs, 0), fmt_number(abs(var_abs), 0), positive=var_abs >= 0)
-with c4:
-    metric_card("Variación porcentual", fmt_pct(var_pct), fmt_pct(abs(var_pct)), positive=var_pct >= 0)
-
-c5, c6, c7, c8 = st.columns(4)
-with c5:
     metric_card("Puestos analizados", fmt_number(puestos_total, 0))
-with c6:
-    metric_card("Actividades oficiales", fmt_number(actividades_oficiales_total, 0))
-with c7:
-    metric_card("Volanteos confirmados", fmt_number(volanteos_total, 0))
-with c8:
-    metric_card("Mesas de trabajo", fmt_number(mesas_total, 0))
 
-c9, c10, c11, c12, c13 = st.columns(5)
-with c9:
-    metric_card("Iglesias oficiales", fmt_number(iglesias_total, 0))
-with c10:
-    metric_card("Prioridad alta", fmt_number(puestos_alta, 0))
-with c11:
-    metric_card("Cambios sugeridos", fmt_number(puestos_cambio_templo, 0))
-with c12:
-    metric_card("JAL / Concejo 2023", f"{fmt_number(jal_total, 0)} / {fmt_number(concejo_total, 0)}")
-with c13:
-    metric_card("Cámara / Senado 2026", f"{fmt_number(camara_total, 0)} / {fmt_number(senado_total, 0)}")
+with c4:
+    metric_card("Puestos prioridad alta", fmt_number(puestos_alta, 0))
+
+with st.expander("Ver indicadores complementarios", expanded=False):
+    e1, e2, e3, e4 = st.columns(4)
+    with e1:
+        metric_card("Total Kennedy 2023", fmt_number(total_2023, 0))
+    with e2:
+        metric_card("Variación porcentual", fmt_pct(var_pct), fmt_pct(abs(var_pct)), positive=var_pct >= 0)
+    with e3:
+        metric_card("Iglesias oficiales", fmt_number(iglesias_total, 0))
+    with e4:
+        metric_card("Cambios sugeridos", fmt_number(puestos_cambio_templo, 0))
+
+    e5, e6, e7, e8, e9 = st.columns(5)
+    with e5:
+        metric_card("Actividades oficiales", fmt_number(actividades_oficiales_total, 0))
+    with e6:
+        metric_card("Volanteos confirmados", fmt_number(volanteos_total, 0))
+    with e7:
+        metric_card("Mesas de trabajo", fmt_number(mesas_total, 0))
+    with e8:
+        metric_card("JAL / Concejo 2023", f"{fmt_number(jal_total, 0)} / {fmt_number(concejo_total, 0)}")
+    with e9:
+        metric_card("Cámara / Senado 2026", f"{fmt_number(camara_total, 0)} / {fmt_number(senado_total, 0)}")
 
 st.markdown(
     f"""
     <div class="summary-ribbon">
-    <b>Lectura ejecutiva:</b> el dashboard separa la comparación <b>JAL / Concejo 2023</b> frente a
-    <b>Cámara / Senado 2026</b>, mantiene solo las cinco iglesias oficiales y cruza puestos fijos,
-    <b>{fmt_number(actividades_oficiales_total, 0)} actividades oficiales</b>,
-    <b>{fmt_number(volanteos_total, 0)} volanteos confirmados</b> y mesas de trabajo con prioridad territorial.
-    La lectura distingue iglesia histórica 2026, templo operativo actual y templo propuesto para discusión territorial.
+    <b>Lectura ejecutiva:</b> Kennedy registra <b>{fmt_number(total_2026, 0)}</b> votos para 2026,
+    con una variación de <b>{fmt_number(var_abs, 0)}</b> frente a 2023.
+    El tablero permite priorizar puestos, revisar presencia territorial y ajustar la asignación operativa
+    por templo para la estrategia electoral.
     </div>
     """,
     unsafe_allow_html=True,
@@ -1578,16 +1982,42 @@ with tab_resumen:
 with tab_mapa:
     st.subheader("Mapa interactivo territorial")
     st.markdown(
-        '<div class="note-box">Este mapa permite revisar presencia territorial, mesas de trabajo y actividades de campaña por templo. Los cambios de templo hechos aquí son temporales y sirven para discusión operativa; no modifican el Excel maestro.</div>',
+        '<div class="note-box">Este mapa permite revisar presencia territorial, mesas de trabajo y actividades de campaña por templo. Los ajustes de templo quedan guardados en base de datos con historial de cambios y no alteran el Excel maestro original.</div>',
         unsafe_allow_html=True,
+    )
+    map_mode = st.radio(
+        "Modo de vista",
+        ["Vista general", "Vista electoral", "Vista operativa", "Vista de calor"],
+        horizontal=True,
     )
     opciones_templo = ["Todos los templos"] + list(IGLESIAS_OFICIALES_PERMITIDAS)
     filtro_templo = st.selectbox("Filtrar vista del mapa por templo", opciones_templo, key="filtro_mapa_templo")
+    ventana_tiempo = st.selectbox(
+        "Ventana temporal de actividades/mesas",
+        ["Todo el histórico", "Últimos 30 días", "Últimos 60 días", "Últimos 90 días"],
+        index=0,
+    )
 
     puestos_mapa = puestos_f.copy()
     acts_mapa = actividades_f.copy()
     mesas_mapa = mesas_f.copy()
     iglesias_mapa = iglesias.copy()
+
+    def _filtrar_por_ventana_temporal(df, ventana):
+        if df is None or df.empty or ventana == "Todo el histórico":
+            return df
+        candidatos = [c for c in df.columns if "FECHA" in str(c).upper()]
+        if not candidatos:
+            return df
+        fecha_col = candidatos[0]
+        dias = int(ventana.split()[1])
+        corte = pd.Timestamp.now() - pd.Timedelta(days=dias)
+        fechas = pd.to_datetime(df[fecha_col], errors="coerce")
+        mask = fechas.notna() & fechas.ge(corte)
+        return df[mask].copy()
+
+    acts_mapa = _filtrar_por_ventana_temporal(acts_mapa, ventana_tiempo)
+    mesas_mapa = _filtrar_por_ventana_temporal(mesas_mapa, ventana_tiempo)
 
     if filtro_templo != "Todos los templos":
         puestos_mapa = puestos_mapa[puestos_mapa["IGLESIA"].eq(filtro_templo)]
@@ -1609,9 +2039,29 @@ with tab_mapa:
         ajustes_operativos = len(st.session_state.get("ajustes_actividades", {})) + len(st.session_state.get("ajustes_mesas", {}))
         metric_card("Ajustes operativos", fmt_number(ajustes_operativos, 0), icon="⚙️")
 
-    mapa = crear_mapa(puestos_mapa, iglesias_mapa, acts_mapa, mesas_mapa)
+    puestos_sin_coord = int(puestos_mapa[["LATITUD", "LONGITUD"]].isna().any(axis=1).sum()) if not puestos_mapa.empty else 0
+    acts_sin_coord = int(acts_mapa[["LATITUD", "LONGITUD"]].isna().any(axis=1).sum()) if not acts_mapa.empty else 0
+    mesas_sin_coord = int(mesas_mapa[["LATITUD", "LONGITUD"]].isna().any(axis=1).sum()) if not mesas_mapa.empty else 0
+
+    q1, q2, q3 = st.columns(3)
+    with q1:
+        metric_card("Puestos sin coordenadas", fmt_number(puestos_sin_coord, 0), icon="🧭")
+    with q2:
+        metric_card("Actividades sin coordenadas", fmt_number(acts_sin_coord, 0), icon="📌")
+    with q3:
+        metric_card("Mesas sin coordenadas", fmt_number(mesas_sin_coord, 0), icon="📍")
+
+    mapa = crear_mapa(puestos_mapa, iglesias_mapa, acts_mapa, mesas_mapa, map_mode=map_mode)
+    st.markdown("### Mapa territorial")
     st.markdown("<div style='font-size:14px; color:#475569; margin-bottom:10px;'>💡 <b>Vista inicial limpia:</b> puestos de votación y templos oficiales. Active el mapa de calor, actividades o mesas desde el control de capas si requiere mayor detalle.</div>", unsafe_allow_html=True)
-    st_folium(mapa, width=None, height=720)
+    map_key = f"mapa_territorial_{map_mode}_{filtro_templo}_{ventana_tiempo}".replace(" ", "_").replace("/", "_")
+    st_folium(
+        mapa,
+        height=760,
+        use_container_width=True,
+        returned_objects=[],
+        key=map_key,
+    )
 
     with st.expander("Ajustar templo de una mesa de trabajo", expanded=False):
         st.caption("Ajuste definitivo para modificar la asignación. No modifica el Excel maestro directamente pero sí los reportes exportables.")
@@ -1647,13 +2097,23 @@ with tab_mapa:
             with m2:
                 mesa_templo = st.selectbox("Templo asignado", TEMPLOS_OFICIALES, index=mesa_index, key="templo_mesa_ajuste_compacto")
                 if st.button("Guardar ajuste de mesa"):
+                    st.session_state.setdefault("ajustes_mesas", {})
                     st.session_state.setdefault("ajustes_mesas", {})[mesa_row["MESA_ID"]] = mesa_templo
+                    registrar_ajuste_en_db(
+                        session_key="ajustes_mesas",
+                        entity_id=mesa_row["MESA_ID"],
+                        nombre_entidad=mesa_row.get("NOMBRE_GESTION", mesa_row.get("TEMA", "")),
+                        templo_nuevo=mesa_templo,
+                        motivo="Ajuste manual desde pestaña Mapa territorial",
+                    )
                     guardar_ajustes_guardados()
                     st.success("Ajuste de mesa guardado.")
                     st.rerun()
                 if st.button("Limpiar ajustes de mesas"):
+                    total_limpiados = limpiar_ajustes_en_db("ajustes_mesas", motivo="Limpieza manual desde pestaña Mapa territorial")
                     st.session_state["ajustes_mesas"] = {}
                     guardar_ajustes_guardados()
+                    st.info(f"Se limpiaron {fmt_number(total_limpiados, 0)} ajuste(s) de mesas en la base.")
                     st.rerun()
 
     st.markdown("### Resumen operativo por templo")
@@ -1676,8 +2136,19 @@ with tab_asignacion:
     st.markdown(
         """
         <div class="section-card">
-        Esta sección conserva la asignación de puestos original registrada en el documento base. Ningún puesto
-        es reasignado automáticamente. Usted puede ajustar y guardar el templo asignado para cada puesto según el análisis territorial.
+        <b>Regla de interpretación.</b><br>
+        La asignación vigente no es una recomendación automática del sistema. Es la última decisión territorial
+        guardada por el equipo. El templo más cercano y la distancia son insumos técnicos para la discusión,
+        pero no modifican la asignación por sí solos.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="note-box">
+        La asignación parte del templo original. La cercanía y las líneas puesto-templo son criterios técnicos
+        de referencia. Los cambios solo aplican cuando se guardan manualmente y quedan persistidos en la base de datos.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1685,64 +2156,168 @@ with tab_asignacion:
 
     asignacion_base = asignacion.copy()
     asignacion_final = aplicar_ajustes_asignacion(asignacion_base)
-    resumen_documental = crear_resumen_asignacion_por_columna(asignacion_final, "IGLESIA_ACTUAL")
     ajustes_puestos = st.session_state.get("ajustes_asignacion", {})
-    resumen_final = crear_resumen_asignacion(asignacion_final)
-    tabla_templos = crear_tabla_puestos_por_templo(asignacion_final)
-    puestos_con_coord = asignacion_final.dropna(subset=["LATITUD", "LONGITUD"]).shape[0]
-    puestos_sin_coord = len(asignacion_final) - puestos_con_coord
-    templo_mayor = resumen_documental.sort_values("PUESTOS", ascending=False).iloc[0] if not resumen_documental.empty else resumen_final.sort_values("PUESTOS_ASIGNADOS", ascending=False).iloc[0]
-    distancia_prom = pd.to_numeric(asignacion_final["DISTANCIA_ASIGNADA_KM"], errors="coerce").mean()
-    distancia_max = pd.to_numeric(asignacion_final["DISTANCIA_ASIGNADA_KM"], errors="coerce").max()
+    actuales_puestos_db = obtener_ajustes_actuales_df("puesto")
+    historial_puestos_db = obtener_historial_ajustes(limit=5000)
+    if not historial_puestos_db.empty:
+        historial_puestos_db = historial_puestos_db[historial_puestos_db["entidad"].eq("puesto")].copy()
 
-    a1, a2, a3, a4, a5 = st.columns(5)
-    with a1:
-        metric_card("Total puestos", fmt_number(len(asignacion_final), 0))
-    with a2:
-        metric_card("Base Class Roma", fmt_number(resumen_documental.loc[resumen_documental["TEMPLO"].eq("CLASS ROMA"), "PUESTOS"].iloc[0] if not resumen_documental.empty else 0, 0))
-    with a3:
-        metric_card("Base Kennedy Central", fmt_number(resumen_documental.loc[resumen_documental["TEMPLO"].eq("KENNEDY CENTRAL"), "PUESTOS"].iloc[0] if not resumen_documental.empty else 0, 0))
-    with a4:
-        metric_card("Base Patio Bonito", fmt_number(resumen_documental.loc[resumen_documental["TEMPLO"].eq("PATIO BONITO"), "PUESTOS"].iloc[0] if not resumen_documental.empty else 0, 0))
-    with a5:
-        metric_card("Base Carvajal", fmt_number(resumen_documental.loc[resumen_documental["TEMPLO"].eq("CARVAJAL"), "PUESTOS"].iloc[0] if not resumen_documental.empty else 0, 0))
+    asignacion_vista = asignacion_final.copy()
+    asignacion_vista["ES_AJUSTADO"] = asignacion_vista["PUESTO"].isin(ajustes_puestos.keys())
+    asignacion_vista["ESTADO_ASIGNACION"] = np.where(asignacion_vista["ES_AJUSTADO"], "Ajustado manualmente", "Original")
+    if "MESAS_TRABAJO_BARRIO" in puestos.columns:
+        mesas_por_puesto = puestos[["PUESTO", "MESAS_TRABAJO_BARRIO"]].drop_duplicates("PUESTO").copy()
+        asignacion_vista = asignacion_vista.merge(mesas_por_puesto, on="PUESTO", how="left")
+    else:
+        asignacion_vista["MESAS_TRABAJO_BARRIO"] = 0
 
-    opciones_filtro_asignacion = ["Todos los templos"] + TEMPLOS_OFICIALES
-    filtro_asignacion_templo = st.selectbox(
-        "Filtrar mapa de asignación por templo",
-        opciones_filtro_asignacion,
-        key="filtro_asignacion_templo"
+    votos_num = pd.to_numeric(asignacion_vista.get("VOTOS_2026", pd.Series(dtype=float)), errors="coerce").fillna(0)
+    var_num = pd.to_numeric(asignacion_vista.get("VARIACION_ABSOLUTA", pd.Series(dtype=float)), errors="coerce").fillna(0)
+    mesas_num = pd.to_numeric(asignacion_vista.get("MESAS_TRABAJO_BARRIO", pd.Series(dtype=float)), errors="coerce").fillna(0)
+    dist_num = pd.to_numeric(asignacion_vista.get("DISTANCIA_ASIGNADA_KM", pd.Series(dtype=float)), errors="coerce")
+    umbral_votos = votos_num.quantile(0.70) if not votos_num.empty else 0
+    asignacion_vista["MESA_TRABAJO"] = np.where(mesas_num.gt(0), "SI", "NO")
+    asignacion_vista["NIVEL_RIESGO"] = np.where(
+        (votos_num >= umbral_votos) & (var_num < 0) & (mesas_num <= 0),
+        "ROJA",
+        np.where((var_num < 0) & (mesas_num <= 0), "AMARILLA", "VERDE"),
     )
-    st.caption("Este filtro solo modifica la visualización del mapa. La asignación consolidada y los exportables mantienen todos los puestos.")
+    asignacion_vista["RECOMENDACION"] = np.select(
+        [
+            asignacion_vista["NIVEL_RIESGO"].eq("ROJA"),
+            asignacion_vista["NIVEL_RIESGO"].eq("AMARILLA"),
+            dist_num.gt(3),
+        ],
+        [
+            "Priorizar recuperación territorial y mesa de trabajo.",
+            "Revisar presencia y agenda comunitaria.",
+            "Validar logística por distancia al templo.",
+        ],
+        default="Mantener seguimiento regular.",
+    )
 
-    asignacion_mapa = asignacion_final.copy()
+    st.markdown("### Indicadores principales")
+    col_total, col_visibles, col_ajustes, col_criticos, col_valladolid = st.columns(5)
+
+    st.markdown("### Filtros de análisis")
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        filtro_asignacion_templo = st.selectbox("Templo vigente", ["Todos los templos"] + TEMPLOS_OFICIALES, key="filtro_asignacion_templo")
+    with f2:
+        prioridades_asignacion = sorted(asignacion_vista.get("PRIORIDAD", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+        filtro_prioridad_asignacion = st.selectbox("Prioridad", ["Todas"] + prioridades_asignacion, key="filtro_prioridad_asignacion")
+    with f3:
+        filtro_estado_asignacion = st.selectbox("Estado de asignación", ["Todos", "Original", "Ajustado manualmente"], key="filtro_estado_asignacion")
+    with f4:
+        filtro_criticos_asignacion = st.selectbox("Puestos críticos", ["Todos", "Solo críticos", "Excluir críticos"], key="filtro_criticos_asignacion")
+
+    asignacion_filtrada = asignacion_vista.copy()
     if filtro_asignacion_templo != "Todos los templos":
-        asignacion_mapa = asignacion_mapa[
-            asignacion_mapa["TEMPLO_ASIGNADO_FINAL"].eq(filtro_asignacion_templo)
-        ].copy()
+        asignacion_filtrada = asignacion_filtrada[asignacion_filtrada["TEMPLO_ASIGNADO_FINAL"].eq(filtro_asignacion_templo)].copy()
+    if filtro_prioridad_asignacion != "Todas":
+        asignacion_filtrada = asignacion_filtrada[asignacion_filtrada.get("PRIORIDAD", pd.Series(dtype=str)).astype(str).eq(filtro_prioridad_asignacion)].copy()
+    if filtro_estado_asignacion != "Todos":
+        asignacion_filtrada = asignacion_filtrada[asignacion_filtrada["ESTADO_ASIGNACION"].eq(filtro_estado_asignacion)].copy()
+    if filtro_criticos_asignacion == "Solo críticos":
+        asignacion_filtrada = asignacion_filtrada[asignacion_filtrada["NIVEL_RIESGO"].eq("ROJA")].copy()
+    elif filtro_criticos_asignacion == "Excluir críticos":
+        asignacion_filtrada = asignacion_filtrada[~asignacion_filtrada["NIVEL_RIESGO"].eq("ROJA")].copy()
 
-    puestos_visibles_asig = len(asignacion_mapa)
-    votos_visibles_asig = pd.to_numeric(asignacion_mapa.get("VOTOS_2026", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
-    distancia_prom_visible = pd.to_numeric(asignacion_mapa.get("DISTANCIA_ASIGNADA_KM", pd.Series(dtype=float)), errors="coerce").mean()
-
-    m1, m2, m3 = st.columns(3)
-    with m1:
+    puestos_visibles_asig = len(asignacion_filtrada)
+    puestos_criticos_visibles = int(asignacion_filtrada["NIVEL_RIESGO"].eq("ROJA").sum()) if not asignacion_filtrada.empty else 0
+    asignados_valladolid = int(asignacion_vista["TEMPLO_ASIGNADO_FINAL"].eq("VALLADOLID").sum()) if "TEMPLO_ASIGNADO_FINAL" in asignacion_vista.columns else 0
+    with col_total:
+        metric_card("Total puestos", fmt_number(len(asignacion_vista), 0))
+    with col_visibles:
         metric_card("Puestos visibles", fmt_number(puestos_visibles_asig, 0))
-    with m2:
-        metric_card("Votos 2026 visibles", fmt_number(votos_visibles_asig, 0))
-    with m3:
-        metric_card("Distancia promedio", f"{fmt_number(distancia_prom_visible, 2)} km")
+    with col_ajustes:
+        metric_card("Ajustes guardados", fmt_number(len(ajustes_puestos), 0))
+    with col_criticos:
+        metric_card("Puestos críticos", fmt_number(puestos_criticos_visibles, 0))
+    with col_valladolid:
+        metric_card("Asignados a Valladolid", fmt_number(asignados_valladolid, 0))
 
-    mapa_asignacion = crear_mapa_asignacion(asignacion_mapa, iglesias)
-    st_folium(mapa_asignacion, width=None, height=720)
+    st.markdown("### Mapa de asignación de puestos de votación")
+    st.caption("Cada punto conserva el color del templo vigente; las líneas muestran la relación puesto-templo. Active el rango de calor desde capas cuando necesite ver concentración electoral.")
+    mapa_asignacion = crear_mapa_asignacion(asignacion_filtrada, iglesias)
+    asig_map_key = f"mapa_asignacion_{filtro_asignacion_templo}_{filtro_prioridad_asignacion}_{filtro_estado_asignacion}_{filtro_criticos_asignacion}".replace(" ", "_").replace("/", "_")
+    st_folium(
+        mapa_asignacion,
+        height=760,
+        use_container_width=True,
+        returned_objects=[],
+        key=asig_map_key,
+    )
+
+    st.markdown("### Semáforo territorial")
+    semaforo_cols = [
+        "PUESTO", "TEMPLO_ASIGNADO_FINAL", "IGLESIA_ACTUAL", "VOTOS_2026", "VARIACION_ABSOLUTA",
+        "MESA_TRABAJO", "DISTANCIA_ASIGNADA_KM", "NIVEL_RIESGO", "PRIORIDAD", "RECOMENDACION",
+    ]
+    semaforo_cols = [c for c in semaforo_cols if c in asignacion_filtrada.columns]
+    semaforo_df = asignacion_filtrada[semaforo_cols].copy()
+    semaforo_df = semaforo_df.rename(
+        columns={
+            "TEMPLO_ASIGNADO_FINAL": "TEMPLO VIGENTE",
+            "IGLESIA_ACTUAL": "TEMPLO ORIGINAL",
+            "VOTOS_2026": "VOTOS 2026",
+            "VARIACION_ABSOLUTA": "VARIACION",
+            "DISTANCIA_ASIGNADA_KM": "DISTANCIA AL TEMPLO",
+            "NIVEL_RIESGO": "RIESGO",
+        }
+    )
+    if "RIESGO" in semaforo_df.columns:
+        orden_riesgo = {"ROJA": 0, "AMARILLA": 1, "VERDE": 2}
+        semaforo_df["_ORDEN"] = semaforo_df["RIESGO"].map(orden_riesgo).fillna(3)
+        semaforo_df = semaforo_df.sort_values(["_ORDEN", "VOTOS 2026"], ascending=[True, False]).drop(columns=["_ORDEN"])
+    st.dataframe(semaforo_df, hide_index=True, width="stretch")
+
+    st.markdown("### Resumen de decisiones")
+    cambios_df = asignacion_vista[asignacion_vista["ES_AJUSTADO"]].copy()
+    if not cambios_df.empty:
+        cambios_df = cambios_df.merge(
+            actuales_puestos_db.add_prefix("DB_"),
+            left_on="PUESTO",
+            right_on="DB_entidad_id",
+            how="left",
+        )
+        cambios_show = pd.DataFrame(
+            {
+                "PUESTO": cambios_df["PUESTO"],
+                "TEMPLO ORIGINAL": cambios_df.get("IGLESIA_ACTUAL", pd.Series("", index=cambios_df.index)),
+                "TEMPLO VIGENTE": cambios_df["TEMPLO_ASIGNADO_FINAL"],
+                "USUARIO": cambios_df.get("DB_usuario", pd.Series("", index=cambios_df.index)),
+                "FECHA CAMBIO": cambios_df.get("DB_actualizado_en", pd.Series("", index=cambios_df.index)),
+                "NOTA": cambios_df.get("DB_motivo", pd.Series("", index=cambios_df.index)),
+                "VOTOS 2026": cambios_df.get("VOTOS_2026", pd.Series(dtype=float)),
+            }
+        )
+    else:
+        cambios_show = pd.DataFrame(columns=["PUESTO", "TEMPLO ORIGINAL", "TEMPLO VIGENTE", "USUARIO", "FECHA CAMBIO", "NOTA", "VOTOS 2026"])
+    st.dataframe(cambios_show, hide_index=True, width="stretch")
+
+    resumen_documental = crear_resumen_asignacion_por_columna(asignacion_vista, "IGLESIA_ACTUAL")
+    resumen_final = crear_resumen_asignacion(asignacion_vista)
+    impacto = resumen_final[["TEMPLO", "PUESTOS_ASIGNADOS", "VOTOS_2026_ASIGNADOS"]].merge(
+        resumen_documental[["TEMPLO", "PUESTOS", "VOTOS_2026"]],
+        on="TEMPLO",
+        how="left",
+        suffixes=("_VIGENTE", "_ORIGINAL"),
+    )
+    impacto["DELTA_PUESTOS"] = impacto["PUESTOS_ASIGNADOS"] - impacto["PUESTOS"].fillna(0)
+    impacto["DELTA_VOTOS_2026"] = impacto["VOTOS_2026_ASIGNADOS"] - impacto["VOTOS_2026"].fillna(0)
+    st.markdown("#### Impacto por templo")
+    st.dataframe(impacto, hide_index=True, width="stretch")
 
     with st.expander("Ajustar templo de un puesto de votación", expanded=False):
-        st.caption("Ajuste definitivo para modificar la asignación. No modifica el Excel maestro directamente pero sí los reportes exportables.")
+        st.caption("El ajuste manual se registra como decisión territorial vigente y queda en historial.")
         if "ajustes_asignacion" not in st.session_state:
             st.session_state["ajustes_asignacion"] = {}
-        lista_puestos = asignacion_final["PUESTO"].dropna().sort_values().tolist()
+        lista_puestos = asignacion_filtrada["PUESTO"].dropna().sort_values().tolist()
+        if not lista_puestos:
+            lista_puestos = asignacion_vista["PUESTO"].dropna().sort_values().tolist()
         puesto_sel = st.selectbox("Puesto de votación", lista_puestos, key="puesto_ajuste_compacto")
-        puesto_row = asignacion_final[asignacion_final["PUESTO"].eq(puesto_sel)].iloc[0]
+        puesto_row = asignacion_vista[asignacion_vista["PUESTO"].eq(puesto_sel)].iloc[0]
         templo_actual = puesto_row.get("TEMPLO_ASIGNADO_FINAL")
         index_templo = TEMPLOS_OFICIALES.index(templo_actual) if templo_actual in TEMPLOS_OFICIALES else 0
 
@@ -1754,59 +2329,63 @@ with tab_asignacion:
                         ("Templo documento base", puesto_row.get("IGLESIA_ACTUAL")),
                         ("Templo más cercano", puesto_row.get("TEMPLO_MAS_CERCANO")),
                         ("Templo propuesta actual", puesto_row.get("TEMPLO_ASIGNADO_PROPUESTO")),
-                        ("Templo final", puesto_row.get("TEMPLO_ASIGNADO_FINAL")),
+                        ("Templo vigente", puesto_row.get("TEMPLO_ASIGNADO_FINAL")),
                         ("Votos 2026", fmt_number(puesto_row.get("VOTOS_2026"), 0)),
                         ("Prioridad", puesto_row.get("PRIORIDAD")),
+                        ("Estado asignación", puesto_row.get("ESTADO_ASIGNACION")),
                     ],
                     columns=["Campo", "Valor"],
                 ),
                 hide_index=True,
                 width="stretch",
             )
+            historial_puesto = historial_puestos_db[historial_puestos_db["entidad_id"].astype(str).eq(str(puesto_sel))].copy() if not historial_puestos_db.empty else pd.DataFrame()
+            if not historial_puesto.empty:
+                st.markdown("Historial de cambios")
+                st.dataframe(historial_puesto[["creado_en", "templo_anterior", "templo_nuevo", "usuario", "motivo"]], hide_index=True, width="stretch")
         with p2:
             templo_nuevo = st.selectbox("Templo final", TEMPLOS_OFICIALES, index=index_templo, key="templo_puesto_ajuste_compacto")
-            if st.button("Guardar ajuste de puesto"):
+            nota_cambio = st.text_area("Justificación o nota del cambio", key="nota_cambio_puesto", height=110)
+            if st.button("Guardar cambio definitivo"):
                 st.session_state["ajustes_asignacion"][puesto_sel] = templo_nuevo
+                registrar_ajuste_en_db(
+                    session_key="ajustes_asignacion",
+                    entity_id=puesto_sel,
+                    nombre_entidad=puesto_sel,
+                    templo_nuevo=templo_nuevo,
+                    motivo=nota_cambio or "Ajuste manual desde pestaña Asignación de puestos",
+                )
                 guardar_ajustes_guardados()
                 st.success(f"Ajuste guardado: {puesto_sel} -> {templo_nuevo}")
                 st.rerun()
             if st.button("Limpiar ajustes de puestos"):
+                total_limpiados = limpiar_ajustes_en_db("ajustes_asignacion", motivo="Limpieza manual desde pestaña Asignación de puestos")
                 st.session_state["ajustes_asignacion"] = {}
                 guardar_ajustes_guardados()
+                st.info(f"Se limpiaron {fmt_number(total_limpiados, 0)} ajuste(s) de puestos en la base.")
                 st.rerun()
 
-    st.markdown("### Resumen documental base")
-    st.dataframe(resumen_documental, hide_index=True, width="stretch")
-    st.download_button("Descargar resumen base en Excel", to_excel_bytes(resumen_documental, "Resumen Base"), "resumen_documental_base.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_res_base")
-
-    st.markdown("### Resumen de asignación")
-    st.dataframe(resumen_final, hide_index=True, width="stretch")
-    st.download_button("Descargar resumen de asignación en Excel", to_excel_bytes(resumen_final, "Resumen Asignacion"), "resumen_asignacion.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_res_asig")
-    if ajustes_puestos:
-        st.caption(f"Resumen ajustado con {fmt_number(len(ajustes_puestos), 0)} cambio(s) de puesto(s).")
-
-    st.markdown("### Puestos asignados por templo")
-    st.dataframe(tabla_templos, hide_index=True, width="stretch")
-    st.download_button("Descargar puestos por templo en Excel", to_excel_bytes(tabla_templos, "Puestos por Templo"), "puestos_por_templo.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_puestos_templo")
-
-    with st.expander("Lectura automática de la asignación", expanded=True):
-        puestos_lejanos = int(pd.to_numeric(asignacion_final["DISTANCIA_ASIGNADA_KM"], errors="coerce").gt(3).sum())
-        st.write(f"La asignación actual concentra mayor carga en {templo_mayor['TEMPLO']}, con {fmt_number(templo_mayor['PUESTOS'], 0)} puestos.")
-        st.write(f"La distancia promedio hacia el templo asignado, para lectura logística, es de {fmt_number(distancia_prom, 2)} km.")
-        st.write(f"Hay {fmt_number(puestos_lejanos, 0)} puestos a más de 3 km del templo asignado, que requieren revisión logística.")
-
-    csv_asignacion = asignacion_final.to_csv(index=False).encode("utf-8-sig")
-    excel_asignacion = exportar_asignacion_excel(asignacion_final, resumen_final, tabla_templos)
-    d1, d2 = st.columns(2)
-    with d1:
-        st.download_button("Descargar CSV asignación final", csv_asignacion, "asignacion_puestos_final.csv", "text/csv")
-    with d2:
-        st.download_button(
-            "Descargar Excel asignación final",
-            excel_asignacion,
-            "asignacion_puestos_final.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+    st.markdown("### Exportables compactos")
+    tabla_templos = crear_tabla_puestos_por_templo(asignacion_vista)
+    informe_general_asignacion = generar_informe_territorial(asignacion_vista, actividades, mesas)
+    excel_asignacion = exportar_asignacion_excel(asignacion_vista, resumen_final, tabla_templos)
+    excel_cambios = multi_sheet_excel_bytes(
+        {
+            "cambios_guardados": cambios_show,
+            "historial": historial_puestos_db,
+            "impacto_templo": impacto,
+        }
+    )
+    excel_por_templo = exportar_asignacion_por_templo_excel(asignacion_vista, actividades, mesas)
+    e1, e2, e3, e4 = st.columns(4)
+    with e1:
+        st.download_button("Descargar asignación consolidada XLSX", excel_asignacion, "asignacion_consolidada_vigente.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    with e2:
+        st.download_button("Descargar cambios guardados XLSX", excel_cambios, "cambios_guardados_asignacion.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    with e3:
+        st.download_button("Descargar informe por templo", excel_por_templo, "informe_por_templo_asignacion.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    with e4:
+        st.download_button("Descargar informe general", informe_general_asignacion.encode("utf-8"), "informe_general_asignacion.md", "text/markdown")
 
 with tab_iglesia:
     st.subheader("Análisis por iglesia")
@@ -1853,13 +2432,14 @@ with tab_iglesia:
 
     for iglesia in iglesias["IGLESIA"].tolist():
         sub_puestos = puestos_f[puestos_f["IGLESIA"].eq(iglesia)].copy()
-        sub_acts = acts_f[acts_f["IGLESIA"].eq(iglesia)].copy()
+        sub_acts = actividades_f[actividades_f["IGLESIA"].eq(iglesia)].copy()
         sub_mesas = mesas_f[mesas_f["IGLESIA"].eq(iglesia)].copy()
         res = resumen_iglesia_f[resumen_iglesia_f["IGLESIA"].eq(iglesia)]
         
         with st.expander(f"Ficha Estratégica Integral: {iglesia}", expanded=False):
             if not res.empty:
                 r_iglesia = res.iloc[0]
+                informe_templo_md = generar_informe_templo_markdown(iglesia, puestos_f, actividades_f, mesas_f, r_iglesia)
                 
                 # 1. KPIs
                 k1, k2, k3, k4 = st.columns(4)
@@ -1872,11 +2452,11 @@ with tab_iglesia:
                 
                 # Semaforo de Riesgo
                 if var_pct < -0.10:
-                    semaforo = "🔴 Crítico (>10% Fuga)"
+                    semaforo = "Critico (>10% perdida)"
                 elif var_pct < 0:
-                    semaforo = "🟡 Medio (Pérdida)"
+                    semaforo = "Medio (perdida)"
                 else:
-                    semaforo = "🟢 Fortaleza (Crecimiento)"
+                    semaforo = "Fortaleza (crecimiento)"
                 
                 with k1:
                     metric_card("Votos 2026", fmt_number(votos_2026, 0), icon="📊")
@@ -1886,6 +2466,14 @@ with tab_iglesia:
                     metric_card("ROI Político", f"{fmt_number(roi, 1)} v/act", icon="⚡")
                 with k4:
                     metric_card("Estado", semaforo, icon="🚦")
+
+                st.download_button(
+                    f"Descargar informe {iglesia}",
+                    informe_templo_md.encode("utf-8"),
+                    f"informe_templo_{iglesia.lower().replace(' ', '_')}.md",
+                    "text/markdown",
+                    key=f"dl_informe_templo_{iglesia}",
+                )
                 
                 # 2. Charts and Maps
                 col_chart, col_map = st.columns([1, 1.2])
@@ -1927,7 +2515,7 @@ with tab_iglesia:
                         # Add Temple
                         folium.Marker(
                             [lat_t, lon_t], 
-                            icon=folium.Icon(color="darkblue", icon="home", prefix="fa"),
+                            icon=crear_icono_div("templo", COLORES_TEMPLOS.get(iglesia, "#1E3A8A"), "T"),
                             tooltip=iglesia
                         ).add_to(sub_m)
                         
@@ -1942,9 +2530,12 @@ with tab_iglesia:
                             folium.PolyLine([[lat_t, lon_t], [r["LATITUD"], r["LONGITUD"]]], color="#1E3A8A", weight=1.5, opacity=0.35, dash_array="4,6").add_to(sub_m)
 
                         # Add Mesas
-                        icon_html_mesas = '<div style="background-color: #F8FAFC; color: #1E3A8A; border-radius: 50%; width: 14px; height: 14px; display: flex; justify-content: center; align-items: center; font-size: 8px; font-weight: 800; border: 2px solid #1E3A8A;">M</div>'
                         for _, r in sub_mesas.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
-                            folium.Marker([r["LATITUD"], r["LONGITUD"]], icon=folium.DivIcon(html=icon_html_mesas), tooltip=f"Mesa: {r.get('TEMA')}").add_to(sub_m)
+                            folium.Marker(
+                                [r["LATITUD"], r["LONGITUD"]],
+                                icon=crear_icono_div("mesa", "#F97316", "M"),
+                                tooltip=f"Mesa: {r.get('TEMA')}"
+                            ).add_to(sub_m)
                             
                         st_folium(sub_m, height=420, use_container_width=True, key=f"submap_{iglesia}")
                     else:
@@ -2090,6 +2681,7 @@ with tab_export:
     st.subheader("Exportables")
     st.markdown("Descargue la base maestra consolidada o tablas específicas para anexos del informe.")
     informe_ejecutivo_export = generar_informe_ejecutivo_markdown(puestos, resumen_iglesia, matriz, actividades, mesas)
+    historial_ajustes = obtener_historial_ajustes(limit=5000)
 
     if CONSOLIDADO.exists():
         st.download_button(
@@ -2106,6 +2698,7 @@ with tab_export:
         "actividades_campana.csv": actividades,
         "mesas_trabajo.csv": mesas,
         "control_calidad.csv": control,
+        "historial_ajustes_templo.csv": historial_ajustes,
     }
 
     for fname, df in exportables.items():
@@ -2125,3 +2718,6 @@ with tab_export:
 
     with st.expander("Control de calidad de datos"):
         st.dataframe(control, width="stretch", hide_index=True)
+
+    with st.expander("Bitácora de ajustes de templo (base de datos)"):
+        st.dataframe(historial_ajustes, width="stretch", hide_index=True)
