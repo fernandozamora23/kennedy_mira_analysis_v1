@@ -881,11 +881,10 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
     m.get_root().html.add_child(folium.Element(mira_logo_html))
 
     # Puestos
-    puestos_layer = MarkerCluster(name="Puestos de votación fijos", show=True)
+    puestos_layer = folium.FeatureGroup(name="Puestos de votación fijos", show=True)
     for _, r in puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
         iglesia = r.get("IGLESIA", "")
         color = COLORES_TEMPLOS.get(iglesia, "#64748B")
-        num = r.get("NUM_PUESTO", "")
         puesto = safe_html(r.get("PUESTO", ""))
         iglesia = safe_html(r.get("IGLESIA", ""))
         barrio = safe_html(r.get("BARRIO", ""))
@@ -893,7 +892,7 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         accion = safe_html(r.get("ACCION_RECOMENDADA", ""))
         popup = f"""
         <div style="font-family:'Inter', sans-serif; width:340px; color:#0F172A;">
-        <h4 style="margin-bottom:12px; font-weight:800; border-bottom: 1px solid #E2E8F0; padding-bottom:8px;">#{num} - {puesto}</h4>
+        <h4 style="margin-bottom:12px; font-weight:800; border-bottom: 1px solid #E2E8F0; padding-bottom:8px;">{puesto}</h4>
         <table style="width:100%; border-collapse: collapse; font-size: 12.5px;">
             <tr style="background:#F8FAFC;"><td style="padding:6px 8px; font-weight:600; color:#475569;">Iglesia</td><td style="padding:6px 8px; font-weight:700;">{iglesia}</td></tr>
             <tr><td style="padding:6px 8px; font-weight:600; color:#475569;">Barrio (UPZ)</td><td style="padding:6px 8px;">{barrio} ({upz})</td></tr>
@@ -906,17 +905,17 @@ def crear_mapa(puestos, iglesias, actividades, mesas):
         </div>
         """
         
-        icon_html = f"""
-        <div style="background-color: {color}; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; justify-content: center; align-items: center; font-size: 11.5px; font-weight: 800; border: 2.5px solid white; box-shadow: 0 0 10px {color}80, 0 3px 6px rgba(0,0,0,0.16);">
-        {num}
-        </div>
-        """
-
-        folium.Marker(
+        radius = max(5, min(17, float(r.get("VOTOS_2026", 0) or 0) / 14))
+        folium.CircleMarker(
             location=[r["LATITUD"], r["LONGITUD"]],
-            icon=folium.DivIcon(html=icon_html),
+            radius=radius,
             popup=folium.Popup(popup, max_width=380),
-            tooltip=f"#{num} - {r.get('PUESTO','')} | {fmt_number(r.get('VOTOS_2026'),0)} votos",
+            tooltip=f"{r.get('PUESTO','')} | {fmt_number(r.get('VOTOS_2026'),0)} votos",
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.75,
+            weight=1.5,
         ).add_to(puestos_layer)
     puestos_layer.add_to(m)
 
@@ -1480,25 +1479,8 @@ with tab_mapa:
         ajustes_operativos = len(st.session_state.get("ajustes_actividades", {})) + len(st.session_state.get("ajustes_mesas", {}))
         metric_card("Ajustes operativos", fmt_number(ajustes_operativos, 0), icon="⚙️")
 
-    puestos_mapa = puestos_mapa.reset_index(drop=True)
-    puestos_mapa["NUM_PUESTO"] = puestos_mapa.index + 1
-
     mapa = crear_mapa(puestos_mapa, iglesias_mapa, acts_mapa, mesas_mapa)
-    
-    mcol1, mcol2 = st.columns([3, 1])
-    with mcol1:
-        st_folium(mapa, width=None, height=720)
-    with mcol2:
-        st.markdown("<div style='font-family:Inter, sans-serif; font-weight:800; font-size:1.15rem; margin-bottom:1rem; color:#0F172A;'>Relación de Puestos</div>", unsafe_allow_html=True)
-        df_leyenda = puestos_mapa.dropna(subset=["LATITUD", "LONGITUD"])[["NUM_PUESTO", "PUESTO"]].rename(columns={"NUM_PUESTO": "#", "PUESTO": "Nombre del Puesto"})
-        
-        # Streamlit dataframe with basic styling
-        st.dataframe(
-            df_leyenda.style.set_properties(**{'background-color': '#F8FAFC', 'color': '#0F172A', 'font-family': 'Inter'}), 
-            hide_index=True, 
-            height=650, 
-            use_container_width=True
-        )
+    st_folium(mapa, width=None, height=720)
 
     with st.expander("Ajustar templo de una mesa de trabajo", expanded=False):
         st.caption("Ajuste definitivo para modificar la asignación. No modifica el Excel maestro directamente pero sí los reportes exportables.")
