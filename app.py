@@ -1222,7 +1222,7 @@ def agregar_heatmap_electoral(mapa, puestos_df, show=True, name="Rango de calor 
     heat_layer.add_to(mapa)
 
     heat_legend_html = f"""
-    <div style="position: fixed; bottom: 38px; left: 330px; z-index:9999; background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px); padding:12px 14px; border:1px solid #CBD5E1; border-radius:8px; box-shadow:0 8px 22px rgba(15, 23, 42, 0.12); font-size:12px; width: 240px; font-family:'Inter', Arial, sans-serif;">
+    <div style="position: fixed; top: 118px; left: 18px; z-index:9999; background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px); padding:12px 14px; border:1px solid #CBD5E1; border-radius:8px; box-shadow:0 8px 22px rgba(15, 23, 42, 0.12); font-size:12px; width: 240px; font-family:'Inter', Arial, sans-serif;">
     <div style="color:#0F172A; font-weight:900; margin-bottom:7px;">Rango electoral 2026</div>
     <div style="background: linear-gradient(to right, #ECFEFF, #7DD3FC, #2563EB, #F59E0B, #EF4444, #7F1D1D); width: 100%; height: 13px; border-radius: 999px; margin: 8px 0;"></div>
     <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:4px; color:#475569; font-size:10px; font-weight:700;">
