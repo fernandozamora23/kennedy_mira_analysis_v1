@@ -2,5 +2,6 @@
 __pycache__/
 .DS_Store
 .streamlit/secrets.toml
+*.json
 # Mantener el consolidado si se quiere dashboard automático:
 # data/kennedy_mira_consolidado.xlsx
