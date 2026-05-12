@@ -155,6 +155,48 @@ st.markdown(
         color: #0F172A;
     }
 
+    .status-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.85rem;
+        margin: 0.25rem 0 1.35rem 0;
+    }
+
+    .status-item {
+        background: linear-gradient(135deg, rgba(255,255,255,0.98) 0%, rgba(240,253,244,0.86) 100%);
+        border: 1px solid rgba(187, 247, 208, 0.95);
+        border-radius: 15px;
+        padding: 0.9rem 1rem;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.055);
+    }
+
+    .status-item span {
+        display: block;
+        color: #475569;
+        font-size: 0.76rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        margin-bottom: 0.25rem;
+    }
+
+    .status-item strong {
+        color: #0F172A;
+        font-size: 1.08rem;
+        line-height: 1.2;
+    }
+
+    .layer-hint {
+        background: #F0FDF4;
+        border: 1px solid #BBF7D0;
+        border-radius: 12px;
+        color: #14532D;
+        font-size: 0.9rem;
+        font-weight: 650;
+        padding: 0.72rem 0.9rem;
+        margin: 0.45rem 0 0.7rem 0;
+    }
+
     .metric-delta-positive {
         display: inline-block;
         background: #DCFCE7;
@@ -228,6 +270,18 @@ st.markdown(
         padding: 0.9rem 1rem;
         margin: 0.7rem 0;
         color: #78350F;
+    }
+
+    @media (max-width: 900px) {
+        .status-strip {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @media (max-width: 560px) {
+        .status-strip {
+            grid-template-columns: 1fr;
+        }
     }
     </style>
     """,
@@ -1644,6 +1698,19 @@ def metric_card(label, value, delta=None, positive=True, icon="📍"):
     )
 
 
+def status_strip(items):
+    html_items = "".join(
+        f"""
+        <div class="status-item">
+            <span>{safe_html(label)}</span>
+            <strong>{safe_html(value)}</strong>
+        </div>
+        """
+        for label, value in items
+    )
+    st.markdown(f'<div class="status-strip">{html_items}</div>', unsafe_allow_html=True)
+
+
 def aplicar_filtros(puestos, actividades, mesas, filtros):
     iglesias_sel = filtros.get("iglesias", [])
     prioridad_sel = filtros.get("prioridad", [])
@@ -2133,16 +2200,31 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+ajustes_total_global = (
+    len(st.session_state.get("ajustes_asignacion", {}))
+    + len(st.session_state.get("ajustes_mesas", {}))
+    + len(st.session_state.get("ajustes_actividades", {}))
+)
+status_strip(
+    [
+        ("Base de cambios", persistence_backend_label()),
+        ("Ajustes guardados", fmt_number(ajustes_total_global, 0)),
+        ("Templos activos", f"{fmt_number(len(selected_iglesias), 0)} de {fmt_number(len(IGLESIAS_OFICIALES_PERMITIDAS), 0)}"),
+        ("Prioridades activas", fmt_number(len(selected_prioridades), 0)),
+    ]
+)
+
 
 # ============================================================
 # TABS
 # ============================================================
 
-tab_resumen, tab_mapa, tab_asignacion, tab_iglesia, tab_puesto, tab_barrio, tab_prioridad, tab_export = st.tabs(
+tab_resumen, tab_mapa, tab_asignacion, tab_mesas, tab_iglesia, tab_puesto, tab_barrio, tab_prioridad, tab_export = st.tabs(
     [
         "Resumen ejecutivo",
         "Mapa territorial",
         "Asignación de puestos",
+        "Mesas de trabajo",
         "Análisis por iglesia",
         "Análisis por puesto",
         "Barrio / UPZ",
@@ -2367,7 +2449,8 @@ with tab_mapa:
     with q3:
         metric_card("Mesas sin coordenadas", fmt_number(mesas_sin_coord, 0), icon="📍")
 
-    with st.expander("Capas del mapa territorial", expanded=False):
+    st.markdown('<div class="layer-hint">Capas del mapa: active o apague rangos, puntos y operación sin usar el control desplegable interno de Leaflet.</div>', unsafe_allow_html=True)
+    with st.expander("Capas del mapa territorial", expanded=True):
         layer_cols = st.columns(6)
         with layer_cols[0]:
             layer_contorno = st.checkbox("Contorno", value=True, key=f"territorial_contorno_{map_mode}")
@@ -2573,7 +2656,8 @@ with tab_asignacion:
 
     st.markdown("### Mapa de asignación de puestos de votación")
     st.caption("Cada punto conserva el color del templo vigente; las líneas muestran la relación puesto-templo. Las convenciones ejecutivas del mapa aparecen integradas abajo.")
-    with st.expander("Capas del mapa de asignación", expanded=False):
+    st.markdown('<div class="layer-hint">Capas del mapa: use estos controles para ajustar la lectura sin ocultar las convenciones ejecutivas.</div>', unsafe_allow_html=True)
+    with st.expander("Capas del mapa de asignación", expanded=True):
         asig_layer_cols = st.columns(5)
         with asig_layer_cols[0]:
             asig_layer_contorno = st.checkbox("Contorno", value=True, key="asignacion_layer_contorno")
@@ -2735,6 +2819,162 @@ with tab_asignacion:
         st.download_button("Descargar informe por templo", excel_por_templo, "informe_por_templo_asignacion.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     with e4:
         st.download_button("Descargar informe general", informe_general_asignacion.encode("utf-8"), "informe_general_asignacion.md", "text/markdown")
+
+with tab_mesas:
+    st.subheader("Mesas de trabajo")
+    st.markdown(
+        """
+        <div class="section-card">
+        <b>Flujo de decisión operativa.</b><br>
+        Esta vista sirve para revisar las mesas de trabajo, validar su templo vigente, guardar ajustes manuales
+        y descargar un reporte de cambios. Cada ajuste queda persistido en la base activa y en el historial.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    mesas_vista = mesas.copy()
+    if "MESA_ID" not in mesas_vista.columns:
+        st.warning("La base de mesas no tiene identificador MESA_ID; no se pueden guardar ajustes de forma segura.")
+    else:
+        actuales_mesas_db = obtener_ajustes_actuales_df("mesa")
+        historial_mesas_db = obtener_historial_ajustes(limit=5000)
+        if not historial_mesas_db.empty:
+            historial_mesas_db = historial_mesas_db[historial_mesas_db["entidad"].eq("mesa")].copy()
+
+        mesas_vista["MESA_ID_TXT"] = mesas_vista["MESA_ID"].astype(str)
+        mesas_vista["TEMPLO_VIGENTE"] = mesas_vista.get("IGLESIA", pd.Series("", index=mesas_vista.index)).fillna("")
+        mesas_vista["TEMPLO_ORIGINAL"] = mesas_vista.get("IGLESIA_ORIGINAL", mesas_vista["TEMPLO_VIGENTE"]).fillna("")
+        mesas_vista["ESTADO_AJUSTE"] = np.where(mesas_vista.get("TEMPLO_AJUSTADO", False), "Ajustada manualmente", "Original")
+
+        st.markdown("### Indicadores de mesas")
+        mt1, mt2, mt3, mt4 = st.columns(4)
+        mesas_sin_coord_total = int(mesas_vista[["LATITUD", "LONGITUD"]].isna().any(axis=1).sum()) if {"LATITUD", "LONGITUD"}.issubset(mesas_vista.columns) else 0
+        with mt1:
+            metric_card("Total mesas", fmt_number(len(mesas_vista), 0), icon="👥")
+        with mt2:
+            metric_card("Ajustes guardados", fmt_number(len(st.session_state.get("ajustes_mesas", {})), 0), icon="💾")
+        with mt3:
+            metric_card("Mesas sin coordenadas", fmt_number(mesas_sin_coord_total, 0), icon="🧭")
+        with mt4:
+            metric_card("Templos con mesas", fmt_number(mesas_vista["TEMPLO_VIGENTE"].nunique(), 0), icon="📍")
+
+        st.markdown("### Filtros de revisión")
+        mf1, mf2, mf3 = st.columns([1, 1, 1.4])
+        with mf1:
+            filtro_mesa_templo = st.selectbox("Templo vigente", ["Todos los templos"] + TEMPLOS_OFICIALES, key="mesas_tab_templo")
+        with mf2:
+            filtro_mesa_estado = st.selectbox("Estado de ajuste", ["Todos", "Original", "Ajustada manualmente"], key="mesas_tab_estado")
+        with mf3:
+            filtro_mesa_texto = st.text_input("Buscar por tema, barrio, líder o nombre", key="mesas_tab_busqueda")
+
+        mesas_filtradas = mesas_vista.copy()
+        if filtro_mesa_templo != "Todos los templos":
+            mesas_filtradas = mesas_filtradas[mesas_filtradas["TEMPLO_VIGENTE"].eq(filtro_mesa_templo)].copy()
+        if filtro_mesa_estado != "Todos":
+            mesas_filtradas = mesas_filtradas[mesas_filtradas["ESTADO_AJUSTE"].eq(filtro_mesa_estado)].copy()
+        if filtro_mesa_texto.strip():
+            texto = filtro_mesa_texto.strip().upper()
+            columnas_busqueda = [c for c in ["NOMBRE_GESTION", "TEMA", "BARRIO", "LIDER", "ESTADO"] if c in mesas_filtradas.columns]
+            if columnas_busqueda:
+                mask = mesas_filtradas[columnas_busqueda].fillna("").astype(str).agg(" ".join, axis=1).str.upper().str.contains(texto, regex=False)
+                mesas_filtradas = mesas_filtradas[mask].copy()
+
+        st.markdown("### Mesa operativa filtrada")
+        mesas_cols = [
+            "MESA_ID", "NOMBRE_GESTION", "TEMA", "BARRIO", "TEMPLO_ORIGINAL", "TEMPLO_VIGENTE",
+            "ESTADO_AJUSTE", "LIDER", "ESTADO", "BENEFICIARIOS",
+        ]
+        mesas_cols = [c for c in mesas_cols if c in mesas_filtradas.columns]
+        st.dataframe(mesas_filtradas[mesas_cols], hide_index=True, width="stretch")
+
+        st.markdown("### Ajuste manual de mesa")
+        if mesas_filtradas.empty:
+            st.info("No hay mesas con los filtros actuales.")
+        else:
+            mesa_selector_df = mesas_filtradas.copy()
+            mesa_selector_df["LABEL"] = mesa_selector_df.apply(
+                lambda r: f"{r.get('MESA_ID')} · {r.get('NOMBRE_GESTION', r.get('TEMA', 'SIN NOMBRE'))} · {r.get('BARRIO', 'SIN BARRIO')} · {r.get('TEMPLO_VIGENTE', '')}",
+                axis=1,
+            )
+            mesa_label = st.selectbox("Mesa de trabajo", mesa_selector_df["LABEL"].tolist(), key="mesas_tab_selector")
+            mesa_row = mesa_selector_df[mesa_selector_df["LABEL"].eq(mesa_label)].iloc[0]
+            mesa_id_raw = mesa_row.get("MESA_ID")
+            try:
+                mesa_id_key = int(mesa_id_raw)
+            except Exception:
+                mesa_id_key = str(mesa_id_raw)
+            templo_actual_mesa = mesa_row.get("TEMPLO_VIGENTE")
+            mesa_index = TEMPLOS_OFICIALES.index(templo_actual_mesa) if templo_actual_mesa in TEMPLOS_OFICIALES else 0
+
+            ma1, ma2 = st.columns([2, 1])
+            with ma1:
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            ("Mesa ID", mesa_row.get("MESA_ID")),
+                            ("Nombre", mesa_row.get("NOMBRE_GESTION", "")),
+                            ("Tema", mesa_row.get("TEMA", "")),
+                            ("Barrio", mesa_row.get("BARRIO", "")),
+                            ("Templo original", mesa_row.get("TEMPLO_ORIGINAL", "")),
+                            ("Templo vigente", mesa_row.get("TEMPLO_VIGENTE", "")),
+                            ("Líder", mesa_row.get("LIDER", "")),
+                            ("Estado", mesa_row.get("ESTADO", "")),
+                        ],
+                        columns=["Campo", "Valor"],
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                )
+                historial_mesa = historial_mesas_db[historial_mesas_db["entidad_id"].astype(str).eq(str(mesa_id_key))].copy() if not historial_mesas_db.empty else pd.DataFrame()
+                if not historial_mesa.empty:
+                    st.markdown("Historial de esta mesa")
+                    st.dataframe(historial_mesa[["creado_en", "templo_anterior", "templo_nuevo", "usuario", "motivo"]], hide_index=True, width="stretch")
+            with ma2:
+                templo_mesa_nuevo = st.selectbox("Templo vigente final", TEMPLOS_OFICIALES, index=mesa_index, key="mesas_tab_templo_final")
+                nota_mesa = st.text_area("Justificación o nota", key="mesas_tab_nota", height=120)
+                if st.button("Guardar cambio definitivo de mesa", key="mesas_tab_guardar"):
+                    st.session_state.setdefault("ajustes_mesas", {})
+                    st.session_state["ajustes_mesas"][mesa_id_key] = templo_mesa_nuevo
+                    registrar_ajuste_en_db(
+                        session_key="ajustes_mesas",
+                        entity_id=mesa_id_key,
+                        nombre_entidad=mesa_row.get("NOMBRE_GESTION", mesa_row.get("TEMA", "")),
+                        templo_nuevo=templo_mesa_nuevo,
+                        motivo=nota_mesa or "Ajuste manual desde pestaña Mesas de trabajo",
+                    )
+                    guardar_ajustes_guardados()
+                    st.success(f"Mesa {mesa_id_key} guardada en {templo_mesa_nuevo}.")
+                    st.rerun()
+                if st.button("Limpiar ajustes de mesas", key="mesas_tab_limpiar"):
+                    total_limpiados = limpiar_ajustes_en_db("ajustes_mesas", motivo="Limpieza manual desde pestaña Mesas de trabajo")
+                    st.session_state["ajustes_mesas"] = {}
+                    guardar_ajustes_guardados()
+                    st.info(f"Se limpiaron {fmt_number(total_limpiados, 0)} ajuste(s) de mesas en la base.")
+                    st.rerun()
+
+        st.markdown("### Resumen de cambios de mesas")
+        if not actuales_mesas_db.empty:
+            cambios_mesas_show = actuales_mesas_db[actuales_mesas_db["entidad"].eq("mesa")].copy()
+        else:
+            cambios_mesas_show = pd.DataFrame(columns=AJUSTES_ACTUALES_COLUMNS)
+        st.dataframe(cambios_mesas_show, hide_index=True, width="stretch")
+
+        excel_mesas = multi_sheet_excel_bytes(
+            {
+                "mesas_vigentes": mesas_vista.drop(columns=[c for c in ["MESA_ID_TXT"] if c in mesas_vista.columns]),
+                "mesas_filtradas": mesas_filtradas.drop(columns=[c for c in ["MESA_ID_TXT"] if c in mesas_filtradas.columns]),
+                "cambios_guardados": cambios_mesas_show,
+                "historial_mesas": historial_mesas_db,
+            }
+        )
+        st.download_button(
+            "Descargar reporte de mesas XLSX",
+            excel_mesas,
+            "reporte_mesas_trabajo_vigente.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_reporte_mesas_tab",
+        )
 
 with tab_iglesia:
     st.subheader("Análisis por iglesia")
