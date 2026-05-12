@@ -1700,12 +1700,7 @@ def metric_card(label, value, delta=None, positive=True, icon="📍"):
 
 def status_strip(items):
     html_items = "".join(
-        f"""
-        <div class="status-item">
-            <span>{safe_html(label)}</span>
-            <strong>{safe_html(value)}</strong>
-        </div>
-        """
+        f'<div class="status-item"><span>{safe_html(label)}</span><strong>{safe_html(value)}</strong></div>'
         for label, value in items
     )
     st.markdown(f'<div class="status-strip">{html_items}</div>', unsafe_allow_html=True)
