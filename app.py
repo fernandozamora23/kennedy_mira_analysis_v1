@@ -32,6 +32,7 @@ st.set_page_config(
 
 DATA_DIR = Path("data")
 CONSOLIDADO = DATA_DIR / "kennedy_mira_consolidado.xlsx"
+TESTIGOS_RESUMEN_CSV = DATA_DIR / "testigos_resumen_2026.csv"
 UPZ_GEOJSON = DATA_DIR / "upz_kennedy.geojson"
 LOCALIDADES_GEOJSON = DATA_DIR / "localidades_bogota.geojson"
 KENNEDY_CENTER = [4.6260, -74.1570]
@@ -905,6 +906,29 @@ def cargar_datos(path: Path, mtime: float = 0):
                     data[key][col] = pd.to_datetime(data[key][col], errors="coerce")
 
     return data
+
+
+@st.cache_data
+def cargar_testigos_resumen(path: Path, mtime: float = 0):
+    if not path.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    if "TEMPLO" not in df.columns:
+        return pd.DataFrame()
+    for col in [
+        "TOTAL_TESTIGOS",
+        "TESTIGOS_MESA_O_REMANENTE",
+        "TESTIGOS_COMISION_ESCRUTADORA",
+        "BENEFICIARIOS_MESAS_TRABAJO",
+        "CANTIDAD_MESAS_TRABAJO_ASOCIADAS",
+        "TESTIGOS_DOBLE_ROL",
+    ]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+    for col in ["PCT_MESA_O_REMANENTE", "PCT_COMISION", "PCT_BENEFICIARIOS_MESAS"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    return df
 
 
 def fmt_number(value, decimals=0):
@@ -1960,6 +1984,10 @@ informe = data["informe"]
 control = data.get("control", pd.DataFrame())
 asignacion = data.get("asignacion", pd.DataFrame())
 resumen_asignacion = data.get("resumen_asignacion", pd.DataFrame())
+testigos_resumen = cargar_testigos_resumen(
+    TESTIGOS_RESUMEN_CSV,
+    TESTIGOS_RESUMEN_CSV.stat().st_mtime if TESTIGOS_RESUMEN_CSV.exists() else 0,
+)
 
 # Filtrar iglesias oficiales permitidas
 IGLESIAS_OFICIALES_PERMITIDAS = ["CLASS ROMA", "KENNEDY CENTRAL", "PATIO BONITO", "CARVAJAL", "VALLADOLID"]
@@ -3141,6 +3169,137 @@ with tab_iglesia:
 
 with tab_puesto:
     st.subheader("Análisis por puesto de votación")
+
+    st.markdown("### Testigos electorales Congreso 2026")
+    if testigos_resumen.empty:
+        st.info("No se encontró el resumen agregado de testigos. Agregue `data/testigos_resumen_2026.csv` para activar este análisis.")
+    else:
+        testigos_base = pd.DataFrame({"TEMPLO": TEMPLOS_OFICIALES}).merge(testigos_resumen, on="TEMPLO", how="left").fillna(0)
+        testigos_base = testigos_base[testigos_base["TEMPLO"].isin(selected_iglesias)].copy()
+
+        puestos_por_templo = puestos_f.groupby("IGLESIA", dropna=False).agg(
+            PUESTOS=("PUESTO", "nunique"),
+            VOTOS_2026=("VOTOS_2026", "sum"),
+        ).reset_index().rename(columns={"IGLESIA": "TEMPLO"})
+        testigos_analisis = testigos_base.merge(puestos_por_templo, on="TEMPLO", how="left").fillna(0)
+        for col in [
+            "TOTAL_TESTIGOS",
+            "TESTIGOS_MESA_O_REMANENTE",
+            "TESTIGOS_COMISION_ESCRUTADORA",
+            "BENEFICIARIOS_MESAS_TRABAJO",
+            "CANTIDAD_MESAS_TRABAJO_ASOCIADAS",
+            "TESTIGOS_DOBLE_ROL",
+            "PUESTOS",
+            "VOTOS_2026",
+        ]:
+            if col in testigos_analisis.columns:
+                testigos_analisis[col] = pd.to_numeric(testigos_analisis[col], errors="coerce").fillna(0)
+        testigos_analisis["TESTIGOS_POR_PUESTO"] = np.where(
+            testigos_analisis["PUESTOS"].gt(0),
+            testigos_analisis["TOTAL_TESTIGOS"] / testigos_analisis["PUESTOS"],
+            0,
+        )
+        testigos_analisis["VOTOS_2026_POR_TESTIGO"] = np.where(
+            testigos_analisis["TOTAL_TESTIGOS"].gt(0),
+            testigos_analisis["VOTOS_2026"] / testigos_analisis["TOTAL_TESTIGOS"],
+            0,
+        )
+
+        total_testigos = int(testigos_analisis["TOTAL_TESTIGOS"].sum())
+        total_mesa_rem = int(testigos_analisis["TESTIGOS_MESA_O_REMANENTE"].sum())
+        total_comision = int(testigos_analisis["TESTIGOS_COMISION_ESCRUTADORA"].sum())
+        total_benef_mesas = int(testigos_analisis["BENEFICIARIOS_MESAS_TRABAJO"].sum())
+
+        tg1, tg2, tg3, tg4 = st.columns(4)
+        with tg1:
+            metric_card("Testigos totales", fmt_number(total_testigos, 0), icon="👥")
+        with tg2:
+            metric_card("Mesa / remanente", fmt_number(total_mesa_rem, 0), icon="🗳️")
+        with tg3:
+            metric_card("Comisión escrutadora", fmt_number(total_comision, 0), icon="⚖️")
+        with tg4:
+            metric_card("Beneficiarios mesas", fmt_number(total_benef_mesas, 0), icon="🤝")
+
+        st.markdown(
+            '<div class="note-box">La carpeta Testigos no trae puesto específico ni campos explícitos de líder/referido. La lectura se hace agregada por templo: testigos de mesa/remanente, comisión escrutadora y beneficiarios vinculados a mesas de trabajo.</div>',
+            unsafe_allow_html=True,
+        )
+
+        tc1, tc2 = st.columns([1.25, 1])
+        with tc1:
+            roles_df = testigos_analisis[
+                [
+                    "TEMPLO",
+                    "TESTIGOS_MESA_O_REMANENTE",
+                    "TESTIGOS_COMISION_ESCRUTADORA",
+                    "BENEFICIARIOS_MESAS_TRABAJO",
+                ]
+            ].melt("TEMPLO", var_name="ROL", value_name="PERSONAS")
+            roles_df["ROL"] = roles_df["ROL"].replace(
+                {
+                    "TESTIGOS_MESA_O_REMANENTE": "Mesa / remanente",
+                    "TESTIGOS_COMISION_ESCRUTADORA": "Comisión escrutadora",
+                    "BENEFICIARIOS_MESAS_TRABAJO": "Beneficiario mesas",
+                }
+            )
+            fig_testigos = px.bar(
+                roles_df,
+                x="TEMPLO",
+                y="PERSONAS",
+                color="ROL",
+                barmode="group",
+                title="Cobertura de testigos y beneficiarios por templo",
+            )
+            fig_testigos.update_layout(height=430, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
+            st.plotly_chart(fig_testigos, width="stretch")
+        with tc2:
+            fig_ratio = px.bar(
+                testigos_analisis.sort_values("TESTIGOS_POR_PUESTO", ascending=True),
+                x="TESTIGOS_POR_PUESTO",
+                y="TEMPLO",
+                orientation="h",
+                title="Testigos por puesto de votación",
+                color="TEMPLO",
+            )
+            fig_ratio.update_layout(height=430, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT, showlegend=False)
+            st.plotly_chart(fig_ratio, width="stretch")
+
+        testigos_show = testigos_analisis.rename(
+            columns={
+                "TOTAL_TESTIGOS": "TOTAL TESTIGOS",
+                "TESTIGOS_MESA_O_REMANENTE": "TESTIGOS MESA / REMANENTE",
+                "TESTIGOS_COMISION_ESCRUTADORA": "COMISION ESCRUTADORA",
+                "BENEFICIARIOS_MESAS_TRABAJO": "BENEFICIARIOS MESAS",
+                "CANTIDAD_MESAS_TRABAJO_ASOCIADAS": "MESAS ASOCIADAS",
+                "TESTIGOS_DOBLE_ROL": "DOBLE ROL",
+                "PUESTOS": "PUESTOS VISIBLES",
+                "VOTOS_2026": "VOTOS 2026",
+                "TESTIGOS_POR_PUESTO": "TESTIGOS POR PUESTO",
+                "VOTOS_2026_POR_TESTIGO": "VOTOS 2026 POR TESTIGO",
+            }
+        )
+        cols_testigos_show = [
+            "TEMPLO",
+            "TOTAL TESTIGOS",
+            "TESTIGOS MESA / REMANENTE",
+            "COMISION ESCRUTADORA",
+            "BENEFICIARIOS MESAS",
+            "MESAS ASOCIADAS",
+            "DOBLE ROL",
+            "PUESTOS VISIBLES",
+            "VOTOS 2026",
+            "TESTIGOS POR PUESTO",
+            "VOTOS 2026 POR TESTIGO",
+        ]
+        cols_testigos_show = [c for c in cols_testigos_show if c in testigos_show.columns]
+        st.dataframe(testigos_show[cols_testigos_show], hide_index=True, width="stretch")
+        st.download_button(
+            "Descargar análisis de testigos por templo",
+            to_excel_bytes(testigos_show[cols_testigos_show], "Testigos por templo"),
+            "analisis_testigos_por_templo.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_testigos_templo",
+        )
 
     col1, col2 = st.columns(2)
     with col1:
