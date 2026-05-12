@@ -3174,14 +3174,13 @@ with tab_puesto:
     if testigos_resumen.empty:
         st.info("No se encontró el resumen agregado de testigos. Agregue `data/testigos_resumen_2026.csv` para activar este análisis.")
     else:
-        testigos_base = pd.DataFrame({"TEMPLO": TEMPLOS_OFICIALES}).merge(testigos_resumen, on="TEMPLO", how="left").fillna(0)
-        testigos_base = testigos_base[testigos_base["TEMPLO"].isin(selected_iglesias)].copy()
+        testigos_base_total = pd.DataFrame({"TEMPLO": TEMPLOS_OFICIALES}).merge(testigos_resumen, on="TEMPLO", how="left").fillna(0)
 
-        puestos_por_templo = puestos_f.groupby("IGLESIA", dropna=False).agg(
+        puestos_por_templo = puestos[puestos["IGLESIA"].isin(TEMPLOS_OFICIALES)].groupby("IGLESIA", dropna=False).agg(
             PUESTOS=("PUESTO", "nunique"),
             VOTOS_2026=("VOTOS_2026", "sum"),
         ).reset_index().rename(columns={"IGLESIA": "TEMPLO"})
-        testigos_analisis = testigos_base.merge(puestos_por_templo, on="TEMPLO", how="left").fillna(0)
+        testigos_analisis_total = testigos_base_total.merge(puestos_por_templo, on="TEMPLO", how="left").fillna(0)
         for col in [
             "TOTAL_TESTIGOS",
             "TESTIGOS_MESA_O_REMANENTE",
@@ -3192,8 +3191,60 @@ with tab_puesto:
             "PUESTOS",
             "VOTOS_2026",
         ]:
-            if col in testigos_analisis.columns:
-                testigos_analisis[col] = pd.to_numeric(testigos_analisis[col], errors="coerce").fillna(0)
+            if col in testigos_analisis_total.columns:
+                testigos_analisis_total[col] = pd.to_numeric(testigos_analisis_total[col], errors="coerce").fillna(0)
+
+        total_testigos_kennedy = float(testigos_analisis_total["TOTAL_TESTIGOS"].sum())
+        testigos_analisis_total["% DEL TOTAL KENNEDY"] = np.where(
+            total_testigos_kennedy > 0,
+            testigos_analisis_total["TOTAL_TESTIGOS"] / total_testigos_kennedy,
+            0,
+        )
+        testigos_analisis_total["% MESA / REMANENTE"] = np.where(
+            testigos_analisis_total["TOTAL_TESTIGOS"].gt(0),
+            testigos_analisis_total["TESTIGOS_MESA_O_REMANENTE"] / testigos_analisis_total["TOTAL_TESTIGOS"],
+            0,
+        )
+        testigos_analisis_total["% COMISION"] = np.where(
+            testigos_analisis_total["TOTAL_TESTIGOS"].gt(0),
+            testigos_analisis_total["TESTIGOS_COMISION_ESCRUTADORA"] / testigos_analisis_total["TOTAL_TESTIGOS"],
+            0,
+        )
+        testigos_analisis_total["% BENEFICIARIOS MESAS"] = np.where(
+            testigos_analisis_total["TOTAL_TESTIGOS"].gt(0),
+            testigos_analisis_total["BENEFICIARIOS_MESAS_TRABAJO"] / testigos_analisis_total["TOTAL_TESTIGOS"],
+            0,
+        )
+        testigos_analisis_total["TESTIGOS_POR_PUESTO"] = np.where(
+            testigos_analisis_total["PUESTOS"].gt(0),
+            testigos_analisis_total["TOTAL_TESTIGOS"] / testigos_analisis_total["PUESTOS"],
+            0,
+        )
+        testigos_analisis_total["VOTOS_2026_POR_TESTIGO"] = np.where(
+            testigos_analisis_total["TOTAL_TESTIGOS"].gt(0),
+            testigos_analisis_total["VOTOS_2026"] / testigos_analisis_total["TOTAL_TESTIGOS"],
+            0,
+        )
+
+        total_row = {
+            "TEMPLO": "TOTAL KENNEDY",
+            "TOTAL_TESTIGOS": testigos_analisis_total["TOTAL_TESTIGOS"].sum(),
+            "TESTIGOS_MESA_O_REMANENTE": testigos_analisis_total["TESTIGOS_MESA_O_REMANENTE"].sum(),
+            "TESTIGOS_COMISION_ESCRUTADORA": testigos_analisis_total["TESTIGOS_COMISION_ESCRUTADORA"].sum(),
+            "BENEFICIARIOS_MESAS_TRABAJO": testigos_analisis_total["BENEFICIARIOS_MESAS_TRABAJO"].sum(),
+            "CANTIDAD_MESAS_TRABAJO_ASOCIADAS": testigos_analisis_total["CANTIDAD_MESAS_TRABAJO_ASOCIADAS"].sum(),
+            "TESTIGOS_DOBLE_ROL": testigos_analisis_total["TESTIGOS_DOBLE_ROL"].sum(),
+            "PUESTOS": testigos_analisis_total["PUESTOS"].sum(),
+            "VOTOS_2026": testigos_analisis_total["VOTOS_2026"].sum(),
+        }
+        total_row["% DEL TOTAL KENNEDY"] = 1 if total_row["TOTAL_TESTIGOS"] else 0
+        total_row["% MESA / REMANENTE"] = total_row["TESTIGOS_MESA_O_REMANENTE"] / total_row["TOTAL_TESTIGOS"] if total_row["TOTAL_TESTIGOS"] else 0
+        total_row["% COMISION"] = total_row["TESTIGOS_COMISION_ESCRUTADORA"] / total_row["TOTAL_TESTIGOS"] if total_row["TOTAL_TESTIGOS"] else 0
+        total_row["% BENEFICIARIOS MESAS"] = total_row["BENEFICIARIOS_MESAS_TRABAJO"] / total_row["TOTAL_TESTIGOS"] if total_row["TOTAL_TESTIGOS"] else 0
+        total_row["TESTIGOS_POR_PUESTO"] = total_row["TOTAL_TESTIGOS"] / total_row["PUESTOS"] if total_row["PUESTOS"] else 0
+        total_row["VOTOS_2026_POR_TESTIGO"] = total_row["VOTOS_2026"] / total_row["TOTAL_TESTIGOS"] if total_row["TOTAL_TESTIGOS"] else 0
+
+        testigos_analisis = testigos_analisis_total[testigos_analisis_total["TEMPLO"].isin(selected_iglesias)].copy()
         testigos_analisis["TESTIGOS_POR_PUESTO"] = np.where(
             testigos_analisis["PUESTOS"].gt(0),
             testigos_analisis["TOTAL_TESTIGOS"] / testigos_analisis["PUESTOS"],
@@ -3205,23 +3256,23 @@ with tab_puesto:
             0,
         )
 
-        total_testigos = int(testigos_analisis["TOTAL_TESTIGOS"].sum())
-        total_mesa_rem = int(testigos_analisis["TESTIGOS_MESA_O_REMANENTE"].sum())
-        total_comision = int(testigos_analisis["TESTIGOS_COMISION_ESCRUTADORA"].sum())
-        total_benef_mesas = int(testigos_analisis["BENEFICIARIOS_MESAS_TRABAJO"].sum())
+        total_testigos = int(total_row["TOTAL_TESTIGOS"])
+        total_mesa_rem = int(total_row["TESTIGOS_MESA_O_REMANENTE"])
+        total_comision = int(total_row["TESTIGOS_COMISION_ESCRUTADORA"])
+        total_benef_mesas = int(total_row["BENEFICIARIOS_MESAS_TRABAJO"])
 
         tg1, tg2, tg3, tg4 = st.columns(4)
         with tg1:
-            metric_card("Testigos totales", fmt_number(total_testigos, 0), icon="👥")
+            metric_card("Total Kennedy", fmt_number(total_testigos, 0), icon="👥")
         with tg2:
-            metric_card("Mesa / remanente", fmt_number(total_mesa_rem, 0), icon="🗳️")
+            metric_card("Mesa / remanente", f"{fmt_number(total_mesa_rem, 0)} ({fmt_pct(total_row['% MESA / REMANENTE'])})", icon="🗳️")
         with tg3:
-            metric_card("Comisión escrutadora", fmt_number(total_comision, 0), icon="⚖️")
+            metric_card("Comisión escrutadora", f"{fmt_number(total_comision, 0)} ({fmt_pct(total_row['% COMISION'])})", icon="⚖️")
         with tg4:
-            metric_card("Beneficiarios mesas", fmt_number(total_benef_mesas, 0), icon="🤝")
+            metric_card("Beneficiarios mesas", f"{fmt_number(total_benef_mesas, 0)} ({fmt_pct(total_row['% BENEFICIARIOS MESAS'])})", icon="🤝")
 
         st.markdown(
-            '<div class="note-box">La carpeta Testigos no trae puesto específico ni campos explícitos de líder/referido. La lectura se hace agregada por templo: testigos de mesa/remanente, comisión escrutadora y beneficiarios vinculados a mesas de trabajo.</div>',
+            '<div class="note-box"><b>Cómo leer este bloque:</b> “% del total Kennedy” muestra qué tanto pesa cada templo dentro de todos los testigos. “Testigos por puesto” muestra cobertura territorial: entre más alto, más personas disponibles por puesto. “Votos 2026 por testigo” ayuda a ver presión operativa: entre más alto, más carga electoral tendría cada testigo. La carpeta Testigos no trae puesto específico ni campos explícitos de líder/referido; por eso la lectura se hace agregada por templo.</div>',
             unsafe_allow_html=True,
         )
 
@@ -3264,7 +3315,8 @@ with tab_puesto:
             fig_ratio.update_layout(height=430, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT, showlegend=False)
             st.plotly_chart(fig_ratio, width="stretch")
 
-        testigos_show = testigos_analisis.rename(
+        testigos_tabla = pd.concat([testigos_analisis, pd.DataFrame([total_row])], ignore_index=True)
+        testigos_show = testigos_tabla.rename(
             columns={
                 "TOTAL_TESTIGOS": "TOTAL TESTIGOS",
                 "TESTIGOS_MESA_O_REMANENTE": "TESTIGOS MESA / REMANENTE",
@@ -3276,14 +3328,22 @@ with tab_puesto:
                 "VOTOS_2026": "VOTOS 2026",
                 "TESTIGOS_POR_PUESTO": "TESTIGOS POR PUESTO",
                 "VOTOS_2026_POR_TESTIGO": "VOTOS 2026 POR TESTIGO",
+                "% DEL TOTAL KENNEDY": "% DEL TOTAL KENNEDY",
+                "% MESA / REMANENTE": "% MESA / REMANENTE",
+                "% COMISION": "% COMISION",
+                "% BENEFICIARIOS MESAS": "% BENEFICIARIOS MESAS",
             }
         )
         cols_testigos_show = [
             "TEMPLO",
             "TOTAL TESTIGOS",
+            "% DEL TOTAL KENNEDY",
             "TESTIGOS MESA / REMANENTE",
+            "% MESA / REMANENTE",
             "COMISION ESCRUTADORA",
+            "% COMISION",
             "BENEFICIARIOS MESAS",
+            "% BENEFICIARIOS MESAS",
             "MESAS ASOCIADAS",
             "DOBLE ROL",
             "PUESTOS VISIBLES",
@@ -3292,10 +3352,17 @@ with tab_puesto:
             "VOTOS 2026 POR TESTIGO",
         ]
         cols_testigos_show = [c for c in cols_testigos_show if c in testigos_show.columns]
-        st.dataframe(testigos_show[cols_testigos_show], hide_index=True, width="stretch")
+        testigos_show_fmt = testigos_show[cols_testigos_show].copy()
+        for col in ["% DEL TOTAL KENNEDY", "% MESA / REMANENTE", "% COMISION", "% BENEFICIARIOS MESAS"]:
+            if col in testigos_show_fmt.columns:
+                testigos_show_fmt[col] = testigos_show_fmt[col].map(fmt_pct)
+        for col in ["TESTIGOS POR PUESTO", "VOTOS 2026 POR TESTIGO"]:
+            if col in testigos_show_fmt.columns:
+                testigos_show_fmt[col] = pd.to_numeric(testigos_show_fmt[col], errors="coerce").map(lambda v: fmt_number(v, 1))
+        st.dataframe(testigos_show_fmt, hide_index=True, width="stretch")
         st.download_button(
             "Descargar análisis de testigos por templo",
-            to_excel_bytes(testigos_show[cols_testigos_show], "Testigos por templo"),
+            to_excel_bytes(testigos_show_fmt, "Testigos por templo"),
             "analisis_testigos_por_templo.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="dl_testigos_templo",
