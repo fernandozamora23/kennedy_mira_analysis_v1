@@ -2813,6 +2813,36 @@ with tab_asignacion:
                 st.info(f"Se limpiaron {fmt_number(total_limpiados, 0)} ajuste(s) de puestos en la base.")
                 st.rerun()
 
+    resumen_documental = crear_resumen_asignacion_por_columna(asignacion_vista, "IGLESIA_ACTUAL")
+    resumen_final = crear_resumen_asignacion(asignacion_vista)
+    impacto = resumen_final[["TEMPLO", "PUESTOS_ASIGNADOS", "VOTOS_2026_ASIGNADOS"]].merge(
+        resumen_documental[["TEMPLO", "PUESTOS", "VOTOS_2026"]],
+        on="TEMPLO",
+        how="left",
+        suffixes=("_VIGENTE", "_ORIGINAL"),
+    )
+    impacto["PUESTOS"] = impacto["PUESTOS"].fillna(0)
+    impacto["VOTOS_2026"] = impacto["VOTOS_2026"].fillna(0)
+    impacto["DELTA_PUESTOS"] = impacto["PUESTOS_ASIGNADOS"] - impacto["PUESTOS"]
+    impacto["DELTA_VOTOS_2026"] = impacto["VOTOS_2026_ASIGNADOS"] - impacto["VOTOS_2026"]
+    impacto_total = pd.DataFrame(
+        [
+            {
+                "TEMPLO": "TOTAL KENNEDY",
+                "PUESTOS_ASIGNADOS": impacto["PUESTOS_ASIGNADOS"].sum(),
+                "VOTOS_2026_ASIGNADOS": impacto["VOTOS_2026_ASIGNADOS"].sum(),
+                "PUESTOS": impacto["PUESTOS"].sum(),
+                "VOTOS_2026": impacto["VOTOS_2026"].sum(),
+                "DELTA_PUESTOS": impacto["DELTA_PUESTOS"].sum(),
+                "DELTA_VOTOS_2026": impacto["DELTA_VOTOS_2026"].sum(),
+            }
+        ]
+    )
+    impacto = pd.concat([impacto_total, impacto], ignore_index=True)
+    st.markdown("### Impacto por templo")
+    st.caption("Primero se muestra el total Kennedy y debajo el detalle por templo, comparando asignación vigente contra el documento base.")
+    st.dataframe(impacto, hide_index=True, width="stretch")
+
     st.markdown("### Semáforo territorial")
     semaforo_cols = [
         "PUESTO", "TEMPLO_ASIGNADO_FINAL", "IGLESIA_ACTUAL", "VOTOS_2026", "VARIACION_ABSOLUTA",
@@ -2859,20 +2889,6 @@ with tab_asignacion:
     else:
         cambios_show = pd.DataFrame(columns=["PUESTO", "TEMPLO ORIGINAL", "TEMPLO VIGENTE", "USUARIO", "FECHA CAMBIO", "NOTA", "VOTOS 2026"])
     st.dataframe(cambios_show, hide_index=True, width="stretch")
-
-    resumen_documental = crear_resumen_asignacion_por_columna(asignacion_vista, "IGLESIA_ACTUAL")
-    resumen_final = crear_resumen_asignacion(asignacion_vista)
-    impacto = resumen_final[["TEMPLO", "PUESTOS_ASIGNADOS", "VOTOS_2026_ASIGNADOS"]].merge(
-        resumen_documental[["TEMPLO", "PUESTOS", "VOTOS_2026"]],
-        on="TEMPLO",
-        how="left",
-        suffixes=("_VIGENTE", "_ORIGINAL"),
-    )
-    impacto["DELTA_PUESTOS"] = impacto["PUESTOS_ASIGNADOS"] - impacto["PUESTOS"].fillna(0)
-    impacto["DELTA_VOTOS_2026"] = impacto["VOTOS_2026_ASIGNADOS"] - impacto["VOTOS_2026"].fillna(0)
-    st.markdown("#### Impacto por templo")
-    st.dataframe(impacto, hide_index=True, width="stretch")
-
 
     st.markdown("### Exportables compactos")
     tabla_templos = crear_tabla_puestos_por_templo(asignacion_vista)
