@@ -6,6 +6,7 @@ import html
 from io import BytesIO
 import json
 import math
+import re
 import sqlite3
 from datetime import datetime, timezone
 
@@ -410,6 +411,17 @@ def _normalize_sheet_df(df, columns):
     return out[columns].fillna("")
 
 
+def _normalize_spreadsheet_id(value):
+    """Accept a raw Google Sheet ID or a full Sheets URL pasted in secrets."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    url_match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", raw)
+    if url_match:
+        return url_match.group(1)
+    return raw.split("/edit", 1)[0].split("?", 1)[0].split("#", 1)[0].strip()
+
+
 def _google_sheets_config():
     try:
         sheets_cfg = st.secrets.get("google_sheets", {})
@@ -417,7 +429,7 @@ def _google_sheets_config():
     except Exception:
         return None
 
-    spreadsheet_id = str(sheets_cfg.get("spreadsheet_id", "")).strip() if sheets_cfg else ""
+    spreadsheet_id = _normalize_spreadsheet_id(sheets_cfg.get("spreadsheet_id", "")) if sheets_cfg else ""
     if not spreadsheet_id or not service_account:
         return None
 
@@ -476,10 +488,13 @@ def _google_sheets_ready():
     if "google_sheets_ready" not in st.session_state:
         try:
             st.session_state["google_sheets_ready"] = bool(_init_google_sheets_storage())
-            st.session_state.pop("google_sheets_error", None)
+            if st.session_state["google_sheets_ready"]:
+                st.session_state.pop("google_sheets_error", None)
         except Exception as exc:
             st.session_state["google_sheets_ready"] = False
             st.session_state["google_sheets_error"] = str(exc)
+    elif st.session_state.get("google_sheets_ready"):
+        st.session_state.pop("google_sheets_error", None)
     return bool(st.session_state.get("google_sheets_ready"))
 
 
@@ -2090,8 +2105,9 @@ for df in [puestos, resumen_iglesia, resumen_puesto, resumen_barrio, matriz, asi
 with st.sidebar:
     st.header("Configuración del análisis")
     st.markdown("Fuente única: `kennedy_mira_consolidado.xlsx`")
-    st.caption(f"Base de cambios: {persistence_backend_label()}")
-    if st.session_state.get("google_sheets_error"):
+    backend_label = persistence_backend_label()
+    st.caption(f"Base de cambios: {backend_label}")
+    if st.session_state.get("google_sheets_error") and not st.session_state.get("google_sheets_ready"):
         st.warning("Google Sheets está configurado, pero no conectado. Revise credenciales o permisos del archivo.")
 
     iglesias_oficiales = IGLESIAS_OFICIALES_PERMITIDAS
@@ -2705,6 +2721,62 @@ with tab_asignacion:
     with st.container(border=True):
         render_folium_map(mapa_asignacion, height=790, key=asig_map_key)
 
+    with st.expander("Ajustar templo de un puesto de votación", expanded=False):
+        st.caption("El ajuste manual se registra como decisión territorial vigente y queda en historial.")
+        if "ajustes_asignacion" not in st.session_state:
+            st.session_state["ajustes_asignacion"] = {}
+        lista_puestos = asignacion_filtrada["PUESTO"].dropna().sort_values().tolist()
+        if not lista_puestos:
+            lista_puestos = asignacion_vista["PUESTO"].dropna().sort_values().tolist()
+        puesto_sel = st.selectbox("Puesto de votación", lista_puestos, key="puesto_ajuste_compacto")
+        puesto_row = asignacion_vista[asignacion_vista["PUESTO"].eq(puesto_sel)].iloc[0]
+        templo_actual = puesto_row.get("TEMPLO_ASIGNADO_FINAL")
+        index_templo = TEMPLOS_OFICIALES.index(templo_actual) if templo_actual in TEMPLOS_OFICIALES else 0
+
+        p1, p2 = st.columns([2, 1])
+        with p1:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        ("Templo documento base", puesto_row.get("IGLESIA_ACTUAL")),
+                        ("Templo más cercano", puesto_row.get("TEMPLO_MAS_CERCANO")),
+                        ("Templo propuesta actual", puesto_row.get("TEMPLO_ASIGNADO_PROPUESTO")),
+                        ("Templo vigente", puesto_row.get("TEMPLO_ASIGNADO_FINAL")),
+                        ("Votos 2026", fmt_number(puesto_row.get("VOTOS_2026"), 0)),
+                        ("Prioridad", puesto_row.get("PRIORIDAD")),
+                        ("Estado asignación", puesto_row.get("ESTADO_ASIGNACION")),
+                    ],
+                    columns=["Campo", "Valor"],
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+            historial_puesto = historial_puestos_db[historial_puestos_db["entidad_id"].astype(str).eq(str(puesto_sel))].copy() if not historial_puestos_db.empty else pd.DataFrame()
+            if not historial_puesto.empty:
+                st.markdown("Historial de cambios")
+                st.dataframe(historial_puesto[["creado_en", "templo_anterior", "templo_nuevo", "usuario", "motivo"]], hide_index=True, width="stretch")
+        with p2:
+            templo_nuevo = st.selectbox("Templo final", TEMPLOS_OFICIALES, index=index_templo, key="templo_puesto_ajuste_compacto")
+            nota_cambio = st.text_area("Justificación o nota del cambio", key="nota_cambio_puesto", height=110)
+            if st.button("Guardar cambio definitivo"):
+                st.session_state["ajustes_asignacion"][puesto_sel] = templo_nuevo
+                registrar_ajuste_en_db(
+                    session_key="ajustes_asignacion",
+                    entity_id=puesto_sel,
+                    nombre_entidad=puesto_sel,
+                    templo_nuevo=templo_nuevo,
+                    motivo=nota_cambio or "Ajuste manual desde pestaña Asignación de puestos",
+                )
+                guardar_ajustes_guardados()
+                st.success(f"Ajuste guardado: {puesto_sel} -> {templo_nuevo}")
+                st.rerun()
+            if st.button("Limpiar ajustes de puestos"):
+                total_limpiados = limpiar_ajustes_en_db("ajustes_asignacion", motivo="Limpieza manual desde pestaña Asignación de puestos")
+                st.session_state["ajustes_asignacion"] = {}
+                guardar_ajustes_guardados()
+                st.info(f"Se limpiaron {fmt_number(total_limpiados, 0)} ajuste(s) de puestos en la base.")
+                st.rerun()
+
     st.markdown("### Semáforo territorial")
     semaforo_cols = [
         "PUESTO", "TEMPLO_ASIGNADO_FINAL", "IGLESIA_ACTUAL", "VOTOS_2026", "VARIACION_ABSOLUTA",
@@ -2765,61 +2837,6 @@ with tab_asignacion:
     st.markdown("#### Impacto por templo")
     st.dataframe(impacto, hide_index=True, width="stretch")
 
-    with st.expander("Ajustar templo de un puesto de votación", expanded=False):
-        st.caption("El ajuste manual se registra como decisión territorial vigente y queda en historial.")
-        if "ajustes_asignacion" not in st.session_state:
-            st.session_state["ajustes_asignacion"] = {}
-        lista_puestos = asignacion_filtrada["PUESTO"].dropna().sort_values().tolist()
-        if not lista_puestos:
-            lista_puestos = asignacion_vista["PUESTO"].dropna().sort_values().tolist()
-        puesto_sel = st.selectbox("Puesto de votación", lista_puestos, key="puesto_ajuste_compacto")
-        puesto_row = asignacion_vista[asignacion_vista["PUESTO"].eq(puesto_sel)].iloc[0]
-        templo_actual = puesto_row.get("TEMPLO_ASIGNADO_FINAL")
-        index_templo = TEMPLOS_OFICIALES.index(templo_actual) if templo_actual in TEMPLOS_OFICIALES else 0
-
-        p1, p2 = st.columns([2, 1])
-        with p1:
-            st.dataframe(
-                pd.DataFrame(
-                    [
-                        ("Templo documento base", puesto_row.get("IGLESIA_ACTUAL")),
-                        ("Templo más cercano", puesto_row.get("TEMPLO_MAS_CERCANO")),
-                        ("Templo propuesta actual", puesto_row.get("TEMPLO_ASIGNADO_PROPUESTO")),
-                        ("Templo vigente", puesto_row.get("TEMPLO_ASIGNADO_FINAL")),
-                        ("Votos 2026", fmt_number(puesto_row.get("VOTOS_2026"), 0)),
-                        ("Prioridad", puesto_row.get("PRIORIDAD")),
-                        ("Estado asignación", puesto_row.get("ESTADO_ASIGNACION")),
-                    ],
-                    columns=["Campo", "Valor"],
-                ),
-                hide_index=True,
-                width="stretch",
-            )
-            historial_puesto = historial_puestos_db[historial_puestos_db["entidad_id"].astype(str).eq(str(puesto_sel))].copy() if not historial_puestos_db.empty else pd.DataFrame()
-            if not historial_puesto.empty:
-                st.markdown("Historial de cambios")
-                st.dataframe(historial_puesto[["creado_en", "templo_anterior", "templo_nuevo", "usuario", "motivo"]], hide_index=True, width="stretch")
-        with p2:
-            templo_nuevo = st.selectbox("Templo final", TEMPLOS_OFICIALES, index=index_templo, key="templo_puesto_ajuste_compacto")
-            nota_cambio = st.text_area("Justificación o nota del cambio", key="nota_cambio_puesto", height=110)
-            if st.button("Guardar cambio definitivo"):
-                st.session_state["ajustes_asignacion"][puesto_sel] = templo_nuevo
-                registrar_ajuste_en_db(
-                    session_key="ajustes_asignacion",
-                    entity_id=puesto_sel,
-                    nombre_entidad=puesto_sel,
-                    templo_nuevo=templo_nuevo,
-                    motivo=nota_cambio or "Ajuste manual desde pestaña Asignación de puestos",
-                )
-                guardar_ajustes_guardados()
-                st.success(f"Ajuste guardado: {puesto_sel} -> {templo_nuevo}")
-                st.rerun()
-            if st.button("Limpiar ajustes de puestos"):
-                total_limpiados = limpiar_ajustes_en_db("ajustes_asignacion", motivo="Limpieza manual desde pestaña Asignación de puestos")
-                st.session_state["ajustes_asignacion"] = {}
-                guardar_ajustes_guardados()
-                st.info(f"Se limpiaron {fmt_number(total_limpiados, 0)} ajuste(s) de puestos en la base.")
-                st.rerun()
 
     st.markdown("### Exportables compactos")
     tabla_templos = crear_tabla_puestos_por_templo(asignacion_vista)
