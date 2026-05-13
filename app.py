@@ -484,8 +484,10 @@ def _init_google_sheets_storage():
 
 def _google_sheets_ready():
     if not _google_sheets_config():
+        st.session_state["google_sheets_ready"] = False
+        st.session_state["google_sheets_error"] = "Secrets de Google Sheets incompletos o no disponibles."
         return False
-    if "google_sheets_ready" not in st.session_state:
+    if "google_sheets_ready" not in st.session_state or not st.session_state.get("google_sheets_ready"):
         try:
             st.session_state["google_sheets_ready"] = bool(_init_google_sheets_storage())
             if st.session_state["google_sheets_ready"]:
@@ -504,6 +506,35 @@ def persistence_backend_label():
     if _google_sheets_config() and st.session_state.get("google_sheets_error"):
         return "SQLite local (Google Sheets no conectado)"
     return "SQLite local"
+
+
+def google_sheets_diagnostics():
+    try:
+        sheets_cfg = st.secrets.get("google_sheets", {})
+        service_account = st.secrets.get("gcp_service_account", {})
+    except Exception as exc:
+        return {
+            "Secrets leídos": "No",
+            "Detalle": str(exc)[:240],
+        }
+
+    raw_spreadsheet_id = sheets_cfg.get("spreadsheet_id", "") if sheets_cfg else ""
+    spreadsheet_id = _normalize_spreadsheet_id(raw_spreadsheet_id)
+    service_email = str(service_account.get("client_email", "")) if service_account else ""
+    has_private_key = bool(service_account.get("private_key")) if service_account else False
+    masked_spreadsheet_id = (
+        f"{spreadsheet_id[:8]}...{spreadsheet_id[-8:]}" if len(spreadsheet_id) > 16 else (spreadsheet_id or "No configurado")
+    )
+
+    return {
+        "Secrets leídos": "Sí",
+        "google_sheets": "Sí" if bool(sheets_cfg) else "No",
+        "spreadsheet_id": masked_spreadsheet_id,
+        "cuenta_servicio": service_email or "No configurada",
+        "private_key": "Sí" if has_private_key else "No",
+        "estado": "Conectado" if st.session_state.get("google_sheets_ready") else "No conectado",
+        "último_error": st.session_state.get("google_sheets_error", "")[:300] or "Sin error registrado",
+    }
 
 
 def _read_google_sheet_df(title, columns):
@@ -2107,8 +2138,13 @@ with st.sidebar:
     st.markdown("Fuente única: `kennedy_mira_consolidado.xlsx`")
     backend_label = persistence_backend_label()
     st.caption(f"Base de cambios: {backend_label}")
-    if st.session_state.get("google_sheets_error") and not st.session_state.get("google_sheets_ready"):
+    if st.session_state.get("google_sheets_ready"):
+        st.success("Google Sheets conectado. Los cambios se guardan online.")
+    elif st.session_state.get("google_sheets_error"):
         st.warning("Google Sheets está configurado, pero no conectado. Revise credenciales o permisos del archivo.")
+        with st.expander("Diagnóstico Google Sheets", expanded=False):
+            for key, value in google_sheets_diagnostics().items():
+                st.caption(f"**{key}:** {value}")
 
     iglesias_oficiales = IGLESIAS_OFICIALES_PERMITIDAS
     default_iglesias = iglesias_oficiales
