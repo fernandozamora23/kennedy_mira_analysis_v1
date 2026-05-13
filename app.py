@@ -56,6 +56,10 @@ COLORES_TEMPLOS = {
     "CARVAJAL": "#F97316",
     "VALLADOLID": "#DC2626",
 }
+PLOTLY_TEMPLO_ORDERS = {
+    "IGLESIA": TEMPLOS_OFICIALES,
+    "TEMPLO": TEMPLOS_OFICIALES,
+}
 DIST_COLS_TEMPLOS = {
     "CLASS ROMA": "DIST_CLASS_ROMA_KM",
     "KENNEDY CENTRAL": "DIST_KENNEDY_CENTRAL_KM",
@@ -2385,6 +2389,8 @@ with tab_resumen:
             y="PUESTO",
             orientation="h",
             color="IGLESIA",
+            color_discrete_map=COLORES_TEMPLOS,
+            category_orders=PLOTLY_TEMPLO_ORDERS,
             title="Top 10 puestos con mayor crecimiento",
         )
         fig.update_layout(height=420, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
@@ -2397,6 +2403,8 @@ with tab_resumen:
             y="PUESTO",
             orientation="h",
             color="IGLESIA",
+            color_discrete_map=COLORES_TEMPLOS,
+            category_orders=PLOTLY_TEMPLO_ORDERS,
             title="Top 10 puestos con mayor caída",
         )
         fig.update_layout(height=420, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
@@ -3101,6 +3109,8 @@ with tab_iglesia:
             orientation="h",
             title="Votos 2026 por iglesia",
             color="IGLESIA",
+            color_discrete_map=COLORES_TEMPLOS,
+            category_orders=PLOTLY_TEMPLO_ORDERS,
         )
         fig.update_layout(height=420, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT, showlegend=False)
         st.plotly_chart(fig, width="stretch")
@@ -3449,6 +3459,8 @@ with tab_puesto:
                 orientation="h",
                 title="Referidos registrados por templo",
                 color="TEMPLO",
+                color_discrete_map=COLORES_TEMPLOS,
+                category_orders=PLOTLY_TEMPLO_ORDERS,
             )
             fig_ratio.update_layout(height=430, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT, showlegend=False)
             st.plotly_chart(fig_ratio, width="stretch")
@@ -3535,6 +3547,8 @@ with tab_puesto:
             y="PUESTO",
             orientation="h",
             color="IGLESIA",
+            color_discrete_map=COLORES_TEMPLOS,
+            category_orders=PLOTLY_TEMPLO_ORDERS,
             title="Puestos con mayor crecimiento",
         )
         fig.update_layout(height=560, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
@@ -3547,6 +3561,8 @@ with tab_puesto:
             y="PUESTO",
             orientation="h",
             color="IGLESIA",
+            color_discrete_map=COLORES_TEMPLOS,
+            category_orders=PLOTLY_TEMPLO_ORDERS,
             title="Puestos con mayor caída",
         )
         fig.update_layout(height=560, paper_bgcolor="white", plot_bgcolor="white", font_color=COLOR_TEXT)
