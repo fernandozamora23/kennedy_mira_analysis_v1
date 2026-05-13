@@ -45,12 +45,12 @@ COLOR_RED = "#DC2626"
 COLOR_GREEN = "#16A34A"
 COLOR_BLUE = "#2563EB"
 COLOR_ORANGE = "#F97316"
-COLOR_PURPLE = "#7C3AED"
+COLOR_PURPLE = "#C026D3"
 BASE_TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
 BASE_TILE_ATTR = "&copy; OpenStreetMap contributors &copy; CARTO"
 TEMPLOS_OFICIALES = ["CLASS ROMA", "KENNEDY CENTRAL", "PATIO BONITO", "CARVAJAL", "VALLADOLID"]
 COLORES_TEMPLOS = {
-    "CLASS ROMA": "#7C3AED",
+    "CLASS ROMA": "#C026D3",
     "KENNEDY CENTRAL": "#2563EB",
     "PATIO BONITO": "#16A34A",
     "CARVAJAL": "#F97316",
