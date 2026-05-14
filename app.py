@@ -3778,27 +3778,33 @@ def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general", 
 
 
 @st.cache_data(show_spinner=False, max_entries=20)
-def cached_crear_mapa_html(puestos, iglesias, actividades, mesas, map_mode="Vista general", layers_config_tuple=None):
+def cached_crear_mapa_html(puestos, iglesias, actividades, mesas, map_mode="Vista general", layers_config_tuple=None, height=790):
     layers_config = dict(layers_config_tuple) if layers_config_tuple else None
     m = crear_mapa(puestos, iglesias, actividades, mesas, map_mode, layers_config)
-    html = m.get_root().render()
+    import folium
+    fig = folium.Figure(width=1600, height=height).add_child(m)
+    html = fig.render()
     del m
+    del fig
     import gc
     gc.collect()
     return html
 
 @st.cache_data(show_spinner=False, max_entries=20)
-def cached_crear_mapa_asignacion_html(asignacion_df, iglesias_df, layers_config_tuple=None):
+def cached_crear_mapa_asignacion_html(asignacion_df, iglesias_df, layers_config_tuple=None, height=790):
     layers_config = dict(layers_config_tuple) if layers_config_tuple else None
     m = crear_mapa_asignacion(asignacion_df, iglesias_df, layers_config)
-    html = m.get_root().render()
+    import folium
+    fig = folium.Figure(width=1600, height=height).add_child(m)
+    html = fig.render()
     del m
+    del fig
     import gc
     gc.collect()
     return html
 
 @st.cache_data(show_spinner=False, max_entries=20)
-def cached_submap_html(iglesia, lat_t, lon_t, sub_puestos, sub_mesas):
+def cached_submap_html(iglesia, lat_t, lon_t, sub_puestos, sub_mesas, height=460):
     sub_m = crear_mapa_base(location=[lat_t, lon_t], zoom_start=14, control_scale=False)
     import folium
     folium.Marker(
@@ -3825,8 +3831,10 @@ def cached_submap_html(iglesia, lat_t, lon_t, sub_puestos, sub_mesas):
             icon=crear_icono_div("mesa", "#F97316", "M"),
             tooltip=f"{nombre_mesa} | {r.get('BARRIO', '')}",
         ).add_to(sub_m)
-    html = sub_m.get_root().render()
+    fig = folium.Figure(width=1600, height=height).add_child(sub_m)
+    html = fig.render()
     del sub_m
+    del fig
     import gc
     gc.collect()
     return html
@@ -4959,6 +4967,7 @@ with tab_mesas:
                     mesas_mapa,
                     "Vista operativa",
                     tuple(layer_cfg.items()),
+                    height=620,
                 )
                 with st.container(border=True):
                     st.components.v1.html(html_map, height=620)
