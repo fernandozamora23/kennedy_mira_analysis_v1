@@ -5329,7 +5329,10 @@ with tab_iglesia:
                 if st.button(f"Preparar informe PDF de {iglesia}", key=f"btn_prep_{iglesia}"):
                     with st.spinner(f"Generando PDF de alta calidad para {iglesia}... (puede tardar unos segundos)"):
                         st.session_state[cache_key] = generar_pdf_templo(iglesia, metricas_templo, sub_puestos, sub_mesas, templo_row)
-                        st.rerun()
+                        if hasattr(st, "rerun"):
+                            st.rerun()
+                        else:
+                            st.experimental_rerun()
             else:
                 st.success("PDF generado y listo para descargar.")
                 st.download_button(
