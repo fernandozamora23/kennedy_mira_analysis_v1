@@ -489,6 +489,8 @@ def cargar_mesas_tecnologia():
             "CONCEJAL": r.get("CONCEJAL", ""),
             "NOMBRE_GESTION": r.get("NOMBRE_GESTION", ""),
             "BENEFICIARIOS": pd.to_numeric(r.get("BENEFICIARIOS"), errors="coerce"),
+            "BENEFICIARIOS_NO_INFOMIRA": pd.to_numeric(r.get("BENEFICIARIOS_NO_INFOMIRA"), errors="coerce"),
+            "BENEFICIARIOS_REFERIDOS": pd.to_numeric(r.get("BENEFICIARIOS_REFERIDOS"), errors="coerce"),
             "COMPROMISOS_TOTAL": pd.to_numeric(r.get("COMPROMISOS_TOTAL"), errors="coerce"),
             "COMPROMISOS_EN_PROCESO": pd.to_numeric(r.get("COMPROMISOS_EN_PROCESO"), errors="coerce"),
             "COMPROMISOS_FINALIZADOS": pd.to_numeric(r.get("COMPROMISOS_FINALIZADOS"), errors="coerce"),
