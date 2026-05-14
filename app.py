@@ -3777,6 +3777,48 @@ def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general", 
     return m
 
 
+@st.cache_data(show_spinner=False, max_entries=20)
+def cached_crear_mapa_html(puestos, iglesias, actividades, mesas, map_mode="Vista general", layers_config_tuple=None):
+    layers_config = dict(layers_config_tuple) if layers_config_tuple else None
+    m = crear_mapa(puestos, iglesias, actividades, mesas, map_mode, layers_config)
+    return m.get_root().render()
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def cached_crear_mapa_asignacion_html(asignacion_df, iglesias_df, layers_config_tuple=None):
+    layers_config = dict(layers_config_tuple) if layers_config_tuple else None
+    m = crear_mapa_asignacion(asignacion_df, iglesias_df, layers_config)
+    return m.get_root().render()
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def cached_submap_html(iglesia, lat_t, lon_t, sub_puestos, sub_mesas):
+    sub_m = crear_mapa_base(location=[lat_t, lon_t], zoom_start=14, control_scale=False)
+    folium.Marker(
+        [lat_t, lon_t],
+        icon=crear_icono_div("templo", COLORES_TEMPLOS.get(iglesia, "#1E3A8A"), "T"),
+        tooltip=iglesia,
+    ).add_to(sub_m)
+    for _, r in sub_puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
+        folium.CircleMarker(
+            [r["LATITUD"], r["LONGITUD"]],
+            radius=max(5, min(14, float(r.get("VOTOS_2026", 0)) / 15)),
+            color="#1E3A8A",
+            fill=True,
+            fill_color="#3B82F6",
+            fill_opacity=0.7,
+            weight=1,
+            tooltip=f"{r.get('PUESTO')} | {fmt_number(r.get('VOTOS_2026'), 0)} votos",
+        ).add_to(sub_m)
+        folium.PolyLine([[lat_t, lon_t], [r["LATITUD"], r["LONGITUD"]]], color="#1E3A8A", weight=1.4, opacity=0.28, dash_array="4,6").add_to(sub_m)
+    for _, r in sub_mesas.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
+        nombre_mesa = r.get("NOMBRE_GESTION") or r.get("TEMA") or "Mesa sin nombre"
+        folium.Marker(
+            [r["LATITUD"], r["LONGITUD"]],
+            icon=crear_icono_div("mesa", "#F97316", "M"),
+            tooltip=f"{nombre_mesa} | {r.get('BARRIO', '')}",
+        ).add_to(sub_m)
+    return sub_m.get_root().render()
+
+
 def download_excel_link():
     with open(CONSOLIDADO, "rb") as f:
         return f.read()
@@ -4388,12 +4430,11 @@ with tab_mapa:
         "actividades": layer_actividades,
         "mesas": layer_mesas,
     }
-    mapa = crear_mapa(puestos_mapa, iglesias_mapa, acts_mapa, mesas_mapa, map_mode=map_mode, layers_config=territorial_layers)
+    html_map = cached_crear_mapa_html(puestos_mapa, iglesias_mapa, acts_mapa, mesas_mapa, map_mode, tuple(territorial_layers.items()))
     st.markdown("### Mapa territorial")
     st.markdown("<div style='font-size:14px; color:#475569; margin-bottom:10px;'>💡 <b>Vista inicial limpia:</b> el modo de vista controla si se muestran votos, calor, actividades o mesas. Las convenciones del mapa quedan integradas abajo.</div>", unsafe_allow_html=True)
-    map_key = f"mapa_territorial_v3_{map_mode}_{filtro_templo}_{ventana_tiempo}_{layer_contorno}_{layer_templos}_{layer_heat}_{layer_puestos}_{layer_actividades}_{layer_mesas}".replace(" ", "_").replace("/", "_")
     with st.container(border=True):
-        render_folium_map(mapa, height=790, key=map_key)
+        st.components.v1.html(html_map, height=790)
 
     with st.expander("Ajustar templo de una mesa de trabajo", expanded=False):
         st.caption("Ajuste definitivo para modificar la asignación. No modifica el Excel maestro directamente pero sí los reportes exportables.")
@@ -4676,10 +4717,9 @@ with tab_asignacion:
         "puestos": asig_layer_puestos,
         "templos": asig_layer_templos,
     }
-    mapa_asignacion = crear_mapa_asignacion(asignacion_filtrada, iglesias, layers_config=asignacion_layers)
-    asig_map_key = f"mapa_asignacion_v3_{filtro_asignacion_templo}_{asig_layer_contorno}_{asig_layer_heat}_{asig_layer_lineas}_{asig_layer_puestos}_{asig_layer_templos}".replace(" ", "_").replace("/", "_")
+    html_map = cached_crear_mapa_asignacion_html(asignacion_filtrada, iglesias, tuple(asignacion_layers.items()))
     with st.container(border=True):
-        render_folium_map(mapa_asignacion, height=790, key=asig_map_key)
+        st.components.v1.html(html_map, height=790)
 
     with st.expander("Ajustar templo de un puesto de votación", expanded=False):
         st.caption("El ajuste manual se registra como decisión territorial vigente y queda en historial.")
@@ -4890,13 +4930,7 @@ with tab_mesas:
             if mesas_mapa_con_coord.empty:
                 st.info("No hay mesas con coordenadas para los filtros actuales.")
             else:
-                mapa_mesas = crear_mapa(
-                    puestos.head(0),
-                    iglesias,
-                    actividades.head(0),
-                    mesas_mapa,
-                    map_mode="Vista operativa",
-                    layers_config={
+                layer_cfg = {
                         "contorno": True,
                         "upz": False,
                         "heat": False,
@@ -4904,11 +4938,17 @@ with tab_mesas:
                         "actividades": False,
                         "mesas": True,
                         "templos": True,
-                    },
+                    }
+                html_map = cached_crear_mapa_html(
+                    puestos.head(0),
+                    iglesias,
+                    actividades.head(0),
+                    mesas_mapa,
+                    "Vista operativa",
+                    tuple(layer_cfg.items()),
                 )
-                mapa_mesas_key = f"mapa_mesas_{filtro_mesa_templo}_{filtro_mesa_estado}_{filtro_mesa_texto}_{len(mesas_filtradas)}".replace(" ", "_").replace("/", "_")
                 with st.container(border=True):
-                    render_folium_map(mapa_mesas, height=620, key=mapa_mesas_key)
+                    st.components.v1.html(html_map, height=620)
         else:
             st.info("La base de mesas no tiene columnas LATITUD y LONGITUD para mostrar el mapa.")
 
@@ -5271,36 +5311,9 @@ with tab_iglesia:
             if templo_row is not None:
                 lat_t = templo_row["LATITUD"]
                 lon_t = templo_row["LONGITUD"]
-                sub_m = crear_mapa_base(location=[lat_t, lon_t], zoom_start=14, control_scale=False)
-                folium.Marker(
-                    [lat_t, lon_t],
-                    icon=crear_icono_div("templo", COLORES_TEMPLOS.get(iglesia, "#1E3A8A"), "T"),
-                    tooltip=iglesia,
-                ).add_to(sub_m)
-
-                for _, r in sub_puestos.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
-                    folium.CircleMarker(
-                        [r["LATITUD"], r["LONGITUD"]],
-                        radius=max(5, min(14, float(r.get("VOTOS_2026", 0)) / 15)),
-                        color="#1E3A8A",
-                        fill=True,
-                        fill_color="#3B82F6",
-                        fill_opacity=0.7,
-                        weight=1,
-                        tooltip=f"{r.get('PUESTO')} | {fmt_number(r.get('VOTOS_2026'), 0)} votos",
-                    ).add_to(sub_m)
-                    folium.PolyLine([[lat_t, lon_t], [r["LATITUD"], r["LONGITUD"]]], color="#1E3A8A", weight=1.4, opacity=0.28, dash_array="4,6").add_to(sub_m)
-
-                for _, r in sub_mesas.dropna(subset=["LATITUD", "LONGITUD"]).iterrows():
-                    nombre_mesa = r.get("NOMBRE_GESTION") or r.get("TEMA") or "Mesa sin nombre"
-                    folium.Marker(
-                        [r["LATITUD"], r["LONGITUD"]],
-                        icon=crear_icono_div("mesa", "#F97316", "M"),
-                        tooltip=f"{nombre_mesa} | {r.get('BARRIO', '')}",
-                    ).add_to(sub_m)
-
+                html_map = cached_submap_html(iglesia, lat_t, lon_t, sub_puestos, sub_mesas)
                 st.markdown("### Mapa territorial del templo")
-                st_folium(sub_m, height=460, use_container_width=True, key=f"submap_{iglesia}")
+                st.components.v1.html(html_map, height=460)
             else:
                 st.info("Sin coordenadas del templo.")
 
