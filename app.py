@@ -1439,6 +1439,8 @@ def format_table_for_display(data):
             df[column] = df[column].map(format_percent_cell)
         elif pd.api.types.is_numeric_dtype(df[column]):
             df[column] = df[column].map(lambda value, col=column: format_table_number(value, col))
+        else:
+            df[column] = df[column].fillna("").astype(str)
     return df.rename(columns={column: prettify_table_column(column) for column in df.columns})
 
 
