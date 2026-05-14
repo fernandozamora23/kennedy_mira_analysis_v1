@@ -3781,17 +3781,26 @@ def crear_mapa(puestos, iglesias, actividades, mesas, map_mode="Vista general", 
 def cached_crear_mapa_html(puestos, iglesias, actividades, mesas, map_mode="Vista general", layers_config_tuple=None):
     layers_config = dict(layers_config_tuple) if layers_config_tuple else None
     m = crear_mapa(puestos, iglesias, actividades, mesas, map_mode, layers_config)
-    return m.get_root().render()
+    html = m.get_root().render()
+    del m
+    import gc
+    gc.collect()
+    return html
 
 @st.cache_data(show_spinner=False, max_entries=20)
 def cached_crear_mapa_asignacion_html(asignacion_df, iglesias_df, layers_config_tuple=None):
     layers_config = dict(layers_config_tuple) if layers_config_tuple else None
     m = crear_mapa_asignacion(asignacion_df, iglesias_df, layers_config)
-    return m.get_root().render()
+    html = m.get_root().render()
+    del m
+    import gc
+    gc.collect()
+    return html
 
 @st.cache_data(show_spinner=False, max_entries=20)
 def cached_submap_html(iglesia, lat_t, lon_t, sub_puestos, sub_mesas):
     sub_m = crear_mapa_base(location=[lat_t, lon_t], zoom_start=14, control_scale=False)
+    import folium
     folium.Marker(
         [lat_t, lon_t],
         icon=crear_icono_div("templo", COLORES_TEMPLOS.get(iglesia, "#1E3A8A"), "T"),
@@ -3816,7 +3825,11 @@ def cached_submap_html(iglesia, lat_t, lon_t, sub_puestos, sub_mesas):
             icon=crear_icono_div("mesa", "#F97316", "M"),
             tooltip=f"{nombre_mesa} | {r.get('BARRIO', '')}",
         ).add_to(sub_m)
-    return sub_m.get_root().render()
+    html = sub_m.get_root().render()
+    del sub_m
+    import gc
+    gc.collect()
+    return html
 
 
 def download_excel_link():
