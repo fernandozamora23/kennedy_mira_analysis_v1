@@ -35,12 +35,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-DATA_DIR = Path("data")
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = APP_DIR / "data"
 CONSOLIDADO = DATA_DIR / "kennedy_mira_consolidado.xlsx"
 TESTIGOS_RESUMEN_CSV = DATA_DIR / "testigos_resumen_2026.csv"
 APOYOS_CIUDADANOS_CANDIDATES = [
     DATA_DIR / "Gestion apoyo ciudadano Kennedy.xlsx",
-    Path("..") / "Gestion apoyo ciudadano Kennedy.xlsx",
+    APP_DIR / "Gestion apoyo ciudadano Kennedy.xlsx",
+    APP_DIR.parent / "Gestion apoyo ciudadano Kennedy.xlsx",
 ]
 UPZ_GEOJSON = DATA_DIR / "upz_kennedy.geojson"
 LOCALIDADES_GEOJSON = DATA_DIR / "localidades_bogota.geojson"
