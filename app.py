@@ -1444,12 +1444,20 @@ def format_table_for_display(data):
     return df.rename(columns={column: prettify_table_column(column) for column in df.columns})
 
 
+@st.cache_data(show_spinner=False, max_entries=50)
+def cached_format_table(data):
+    return format_table_for_display(data)
+
 if not hasattr(st, "_kennedy_original_dataframe"):
     st._kennedy_original_dataframe = st.dataframe
 
 
 def kennedy_dataframe(data=None, *args, **kwargs):
-    return st._kennedy_original_dataframe(format_table_for_display(data), *args, **kwargs)
+    if isinstance(data, pd.DataFrame) and not data.empty:
+        data = cached_format_table(data)
+    elif isinstance(data, pd.DataFrame):
+        data = format_table_for_display(data)
+    return st._kennedy_original_dataframe(data, *args, **kwargs)
 
 
 st.dataframe = kennedy_dataframe
@@ -5289,13 +5297,16 @@ with tab_iglesia:
     st.dataframe(resumen_iglesia_f[cols_show], width="stretch", hide_index=True)
     st.download_button("Descargar análisis por iglesia en Excel", to_excel_bytes(resumen_iglesia_f[cols_show], "Analisis Iglesia"), "analisis_iglesia.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_iglesia")
 
-    for iglesia in iglesias["IGLESIA"].tolist():
+    st.markdown("### Fichas territoriales")
+    iglesia = st.selectbox("Seleccione el templo para ver su ficha detallada:", iglesias["IGLESIA"].tolist(), key="select_ficha_templo")
+    
+    if iglesia:
         sub_puestos = puestos_f[puestos_f["IGLESIA"].eq(iglesia)].copy()
         sub_acts = actividades_f[actividades_f["IGLESIA"].eq(iglesia)].copy()
         sub_mesas = mesas_f[mesas_f["IGLESIA"].eq(iglesia)].copy()
         res = resumen_iglesia_f[resumen_iglesia_f["IGLESIA"].eq(iglesia)]
         
-        with st.expander(f"Ficha territorial: {iglesia}", expanded=False):
+        with st.container(border=True):
             r_iglesia = res.iloc[0] if not res.empty else pd.Series(dtype=object)
             votos_2026 = sum_numeric(sub_puestos, "VOTOS_2026")
             votos_2023 = sum_numeric(sub_puestos, "VOTOS_2023")
