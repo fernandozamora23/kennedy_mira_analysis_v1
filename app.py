@@ -2476,9 +2476,10 @@ def pdf_font(size=24, bold=False):
 
 PDF_W, PDF_H = 1240, 1754
 PDF_MARGIN = 60
-PDF_PRINT_SCALE = 3
-PDF_EXPORT_DPI = 450
-PDF_EXPORT_QUALITY = 100
+PDF_PRINT_SCALE = 2
+PDF_EXPORT_DPI = 300
+PDF_EXPORT_QUALITY = 88
+PDF_MAX_TILE_ZOOM = 13
 PDF_NAVY = "#0B1F3A"
 PDF_BLUE = "#2563EB"
 PDF_TEAL = "#14B8A6"
@@ -2710,11 +2711,11 @@ def fetch_cartocdn_tile(zoom, x, y):
     url = BASE_TILE_URL.format(s="a", z=zoom, x=x, y=y, r="")
     request = urllib.request.Request(url, headers={"User-Agent": "KennedyMiraDashboard/1.0"})
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=2.5) as response:
             return response.read()
     except Exception:
         result = subprocess.run(
-            ["curl", "-L", "--fail", "--silent", "--max-time", "6", url],
+            ["curl", "-L", "--fail", "--silent", "--max-time", "3", url],
             capture_output=True,
             check=True,
         )
@@ -2724,7 +2725,7 @@ def fetch_cartocdn_tile(zoom, x, y):
 def choose_tile_zoom(points, width, height):
     if not points:
         return 14
-    for zoom in range(15, 11, -1):
+    for zoom in range(PDF_MAX_TILE_ZOOM, 11, -1):
         coords = [latlon_to_world_pixel(lat, lon, zoom) for _, lat, lon, _ in points]
         xs = [p[0] for p in coords]
         ys = [p[1] for p in coords]
@@ -3503,13 +3504,16 @@ def prepare_print_pdf_pages(pages):
     print_pages = []
     for page in pages:
         page = page.convert("RGB")
-        high_res = page.resize(
-            (page.width * PDF_PRINT_SCALE, page.height * PDF_PRINT_SCALE),
-            Image.Resampling.LANCZOS,
-        )
+        if PDF_PRINT_SCALE > 1:
+            high_res = page.resize(
+                (page.width * PDF_PRINT_SCALE, page.height * PDF_PRINT_SCALE),
+                Image.Resampling.LANCZOS,
+            )
+        else:
+            high_res = page
         high_res = ImageEnhance.Contrast(high_res).enhance(1.04)
-        high_res = ImageEnhance.Sharpness(high_res).enhance(1.18)
-        high_res = high_res.filter(ImageFilter.UnsharpMask(radius=0.55, percent=165, threshold=2))
+        high_res = ImageEnhance.Sharpness(high_res).enhance(1.12)
+        high_res = high_res.filter(ImageFilter.UnsharpMask(radius=0.45, percent=125, threshold=2))
         print_pages.append(high_res)
     return print_pages
 
