@@ -5416,6 +5416,9 @@ with tab_iglesia:
                     "application/pdf",
                     key=f"dl_pdf_templo_{iglesia}",
                 )
+                if st.button(f"Regenerar informe PDF {iglesia}", key=f"btn_regenerar_pdf_templo_{iglesia}"):
+                    del st.session_state[cache_key]
+                    st.rerun()
 
 with tab_puesto:
     st.subheader("Análisis por puesto de votación")
