@@ -59,6 +59,7 @@ COLOR_PURPLE = "#C026D3"
 BASE_TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
 BASE_TILE_ATTR = "&copy; OpenStreetMap contributors &copy; CARTO"
 TEMPLOS_OFICIALES = ["CLASS ROMA", "KENNEDY CENTRAL", "PATIO BONITO", "CARVAJAL", "VALLADOLID"]
+APOYOS_TEMPLO_EXTRA = ["SIN TEMPLO", "SIN TEMPLO OFICIAL"]
 METODOLOGIAS_ELECTORALES = {
     "camara": {
         "label": "JAL 2023 vs Cámara 2026",
@@ -92,10 +93,12 @@ COLORES_TEMPLOS = {
     "PATIO BONITO": "#16A34A",
     "CARVAJAL": "#F97316",
     "VALLADOLID": "#DC2626",
+    "SIN TEMPLO": "#64748B",
+    "SIN TEMPLO OFICIAL": "#94A3B8",
 }
 PLOTLY_TEMPLO_ORDERS = {
-    "IGLESIA": TEMPLOS_OFICIALES,
-    "TEMPLO": TEMPLOS_OFICIALES,
+    "IGLESIA": TEMPLOS_OFICIALES + APOYOS_TEMPLO_EXTRA,
+    "TEMPLO": TEMPLOS_OFICIALES + APOYOS_TEMPLO_EXTRA,
 }
 DIST_COLS_TEMPLOS = {
     "CLASS ROMA": "DIST_CLASS_ROMA_KM",
@@ -1179,6 +1182,8 @@ def first_existing_path(candidates):
 def normalizar_templo_apoyo(value):
     text = strip_accents(str(value or "")).upper().strip()
     text = re.sub(r"^\d+\s*[.-]\s*", "", text)
+    if not text or "SIN TEMPLO" in text:
+        return "SIN TEMPLO"
     if "KENNEDY" in text and "CENTRAL" in text:
         return "KENNEDY CENTRAL"
     if "PATIO" in text and "BONITO" in text:
@@ -5141,9 +5146,8 @@ with tab_apoyos:
             unsafe_allow_html=True,
         )
 
-        templos_apoyo = [t for t in TEMPLOS_OFICIALES if t in set(apoyos_ciudadanos["TEMPLO"])]
-        if "SIN TEMPLO OFICIAL" in set(apoyos_ciudadanos["TEMPLO"]):
-            templos_apoyo.append("SIN TEMPLO OFICIAL")
+        templos_presentes = set(apoyos_ciudadanos["TEMPLO"])
+        templos_apoyo = [t for t in TEMPLOS_OFICIALES + APOYOS_TEMPLO_EXTRA if t in templos_presentes]
         filtro_apoyo_templo = st.selectbox("Filtrar apoyos por templo", ["Todos los templos"] + templos_apoyo, key="filtro_apoyos_templo")
 
         apoyos_view = apoyos_ciudadanos.copy()
