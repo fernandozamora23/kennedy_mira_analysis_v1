@@ -2476,8 +2476,8 @@ def pdf_font(size=24, bold=False):
 
 PDF_W, PDF_H = 1240, 1754
 PDF_MARGIN = 60
-PDF_PRINT_SCALE = 8  # Aumentado para mayor calidad de impresión
-PDF_EXPORT_DPI = 600
+PDF_PRINT_SCALE = 3
+PDF_EXPORT_DPI = 450
 PDF_EXPORT_QUALITY = 100
 PDF_NAVY = "#0B1F3A"
 PDF_BLUE = "#2563EB"
@@ -4625,14 +4625,36 @@ with tab_mapa:
                 width="stretch",
             )
 
-        pdf_general = generar_pdf_electoral_general(asignacion_reporte_mapa, puestos, iglesias, actividades, mesas, testigos_resumen)
-        st.download_button(
-            "Descargar informe electoral PDF",
-            pdf_general,
-            "informe_electoral_general_kennedy.pdf",
-            "application/pdf",
-            key="dl_informe_electoral_general_pdf",
+        pdf_general_key = (
+            f"pdf_general_{metodologia_electoral}_"
+            f"{len(st.session_state.get('ajustes_asignacion', {}))}_"
+            f"{len(st.session_state.get('ajustes_actividades', {}))}_"
+            f"{len(st.session_state.get('ajustes_mesas', {}))}"
         )
+        if pdf_general_key not in st.session_state:
+            if st.button("Preparar informe electoral PDF", key="btn_preparar_informe_electoral_general_pdf"):
+                with st.spinner("Generando informe electoral en PDF... puede tardar unos segundos."):
+                    st.session_state[pdf_general_key] = generar_pdf_electoral_general(
+                        asignacion_reporte_mapa,
+                        puestos,
+                        iglesias,
+                        actividades,
+                        mesas,
+                        testigos_resumen,
+                    )
+                    st.rerun()
+        else:
+            st.success("Informe electoral PDF listo para descargar.")
+            st.download_button(
+                "Descargar informe electoral PDF",
+                st.session_state[pdf_general_key],
+                "informe_electoral_general_kennedy.pdf",
+                "application/pdf",
+                key="dl_informe_electoral_general_pdf",
+            )
+            if st.button("Regenerar informe electoral PDF", key="btn_regenerar_informe_electoral_general_pdf"):
+                del st.session_state[pdf_general_key]
+                st.rerun()
 
 with tab_asignacion:
     st.subheader("Asignación territorial de puestos")
